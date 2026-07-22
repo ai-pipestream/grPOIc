@@ -1,31 +1,39 @@
 # grPOIc
 
-A diskless gRPC streaming server over Apache POI: office document bytes in,
-typed structure events out. No Tika, no temp files, no `exec()` — document
-bytes live only in memory for the duration of the parse.
+A gRPC server that wraps [Apache POI](https://poi.apache.org/). Clients stream
+office document bytes in and receive typed structure events back: metadata,
+paragraphs, tables, sheets, slides, embedded objects, and a final status.
 
-grPOIc is the structured fast path of the pipestream office pipeline. Its
-sibling, the office-bridge (pooled LibreOffice), owns rendering fidelity and
-office-to-PDF conversion; [gRParse](https://github.com/ai-pipestream/gRParse)
-consumes those PDFs for OCR, layout, and page images. grPOIc answers the
-question "what does this document say and contain" without rendering anything.
+The server exists for two reasons:
+
+1. POI is a library, not a service. Putting it behind gRPC gives non-JVM
+   pipelines (like [gRParse](https://github.com/ai-pipestream/gRParse), which
+   is C++) access to office parsing over a stable wire contract, and isolates
+   parser crashes and memory use in a separate process.
+2. Document bytes should not touch disk. The whole parse happens in memory:
+   no temp files, no subprocesses. The container runs with a read-only root
+   filesystem.
+
+grPOIc extracts content and metadata. It does not render. Rendering fidelity
+(office to PDF, page images) belongs to a separate LibreOffice-based bridge
+service; gRParse consumes those PDFs for OCR and layout.
 
 ## API
 
 `ai.pipestream.poi.v1.PoiParseService` (see `grpoic-api/src/main/proto`):
 
-- `ParseDocument(stream ParseRequestChunk) → stream ParseEvent` — the client
-  streams the document as chunks (last one marked `complete`); the server
-  streams back `DocumentInfo` (detected format + typed metadata), then content
-  blocks in document order (`Paragraph`, `Table`, `Sheet`, `Slide`,
-  `EmbeddedObject`), then one final `ParseStatus`.
-- `GetServiceInfo` — capability discovery: versions, supported formats, and
-  operational limits, intended for orchestrators and LLM tool facades.
+- `ParseDocument(stream ParseRequestChunk) returns (stream ParseEvent)`. The
+  client streams the document as chunks, marking the last one `complete`. The
+  server streams back `DocumentInfo` (detected format plus typed metadata),
+  then content blocks in document order (`Paragraph`, `Table`, `Sheet`,
+  `Slide`, `EmbeddedObject`), then one final `ParseStatus`.
+- `GetServiceInfo`: versions, supported formats, and operational limits, for
+  orchestrators and tool facades that need capability discovery.
 
 Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The format
 is detected from the bytes; the advisory content type is never trusted.
-Spreadsheet cells keep their storage types (string, double, boolean, date) and
-formula cells carry the formula source plus the cached result — formulas are
+Spreadsheet cells keep their storage types (string, double, boolean, date).
+Formula cells carry the formula source plus the cached result; formulas are
 never evaluated. Metadata is typed and lossless: well-known core properties as
 first-class fields, everything else in a tagged tail, nothing guessed from
 string shapes.
@@ -38,9 +46,9 @@ gRPC health checking and reflection are registered.
 ## Concurrency model
 
 POI documents are single-threaded; distinct documents on distinct threads is
-the supported pattern. Each parse runs on its own virtual thread with a
-semaphore bounding concurrent parses — the bound protects heap (POI is
-memory-hungry), not just CPU.
+the supported pattern. Each parse runs on its own virtual thread, with a
+semaphore bounding concurrent parses. The bound protects heap (POI holds full
+document models in memory), not just CPU.
 
 ## Configuration
 
@@ -64,5 +72,5 @@ docker run --rm --read-only -p 50052:50052 grpoic
 The image build runs the full test suite; `--read-only` works because the
 server never writes.
 
-Tests author their fixtures with POI itself, in memory — no binary files are
+Tests author their fixtures with POI itself, in memory. No binary files are
 committed, and every assertion is against content the test placed.
