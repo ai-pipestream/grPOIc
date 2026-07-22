@@ -7,16 +7,14 @@ paragraphs, tables, sheets, slides, embedded objects, and a final status.
 The server exists for two reasons:
 
 1. POI is a library, not a service. Putting it behind gRPC gives non-JVM
-   pipelines (like [gRParse](https://github.com/ai-pipestream/gRParse), which
-   is C++) access to office parsing over a stable wire contract, and isolates
+   clients access to office parsing over a stable wire contract, and isolates
    parser crashes and memory use in a separate process.
 2. Document bytes should not touch disk. The whole parse happens in memory:
    no temp files, no subprocesses. The container runs with a read-only root
    filesystem.
 
-grPOIc extracts content and metadata. It does not render. Rendering fidelity
-(office to PDF, page images) belongs to a separate LibreOffice-based bridge
-service; gRParse consumes those PDFs for OCR and layout.
+grPOIc extracts content and metadata. It does not render or convert
+documents.
 
 ## API
 
