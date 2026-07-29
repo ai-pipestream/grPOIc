@@ -4,6 +4,7 @@ import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
 import io.grpc.protobuf.services.HealthStatusManager;
+import io.grpc.protobuf.services.ProtoReflectionService;
 import io.grpc.protobuf.services.ProtoReflectionServiceV1;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -35,6 +36,7 @@ public final class GrPoicServer {
             .maxInboundMessageSize((int) Math.min(Integer.MAX_VALUE, maxDocumentBytes + (1 << 20)))
             .addService(service)
             .addService(health.getHealthService())
+            .addService(ProtoReflectionService.newInstance())
             .addService(ProtoReflectionServiceV1.newInstance())
             .build()
             .start();
