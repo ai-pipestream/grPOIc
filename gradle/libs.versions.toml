@@ -1,10 +1,10 @@
 [versions]
-grpc = "1.69.0"
+grpc = "1.83.1"
 protobuf = "4.29.3"
-poi = "5.4.1"
-log4j = "2.24.3"
-junit = "5.11.4"
-protobufPlugin = "0.9.5"
+poi = "5.5.1"
+log4j = "2.26.1"
+junit = "5.14.4"
+protobufPlugin = "0.10.0"
 
 [libraries]
 grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
