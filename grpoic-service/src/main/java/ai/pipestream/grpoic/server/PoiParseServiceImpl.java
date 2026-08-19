@@ -9,6 +9,7 @@ import ai.pipestream.poi.v1.GetServiceInfoResponse;
 import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseRequestChunk;
 import ai.pipestream.poi.v1.PoiParseServiceGrpc;
+import ai.pipestream.poi.v1.UiInfo;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
@@ -28,6 +29,12 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
 
   public static final String SERVICE_VERSION = "0.1.0";
   public static final String API_VERSION = "v1";
+  // Advertised to the shared demo shell so it can mount this service's tab.
+  public static final UiInfo UI_INFO = UiInfo.newBuilder()
+      .setTitle("POI")
+      .setPath("/ui/grpoic")
+      .setDescription("Apache POI wrapper for office documents")
+      .build();
 
   private final long maxDocumentBytes;
   private final int maxConcurrentParses;
@@ -148,6 +155,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
             .addSupportedFormats(DocumentFormat.DOCUMENT_FORMAT_LEGACY_PPT)
             .setMaxDocumentBytes(maxDocumentBytes)
             .setMaxConcurrentParses(maxConcurrentParses)
+            .setUi(UI_INFO)
             .build());
     responses.onCompleted();
   }

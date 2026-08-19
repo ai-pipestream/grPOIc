@@ -26,7 +26,8 @@ documents.
   then content blocks in document order (`Paragraph`, `Table`, `Sheet`,
   `Slide`, `EmbeddedObject`), then one final `ParseStatus`.
 - `GetServiceInfo`: versions, supported formats, and operational limits, for
-  orchestrators and tool facades that need capability discovery.
+  orchestrators and tool facades that need capability discovery. Also carries
+  a `UiInfo` block advertising this service's tab to the shared demo shell.
 
 Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The format
 is detected from the bytes; the advisory content type is never trusted.

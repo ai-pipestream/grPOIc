@@ -352,6 +352,9 @@ class ParseServiceTest {
     assertEquals(6, info.getSupportedFormatsCount());
     assertEquals(CAP_BYTES, info.getMaxDocumentBytes());
     assertEquals(4, info.getMaxConcurrentParses());
+    assertEquals("POI", info.getUi().getTitle());
+    assertEquals("/ui/grpoic", info.getUi().getPath());
+    assertFalse(info.getUi().getDescription().isEmpty());
   }
 
   @Test
