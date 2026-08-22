@@ -100,7 +100,7 @@ document models in memory), not just CPU.
 |---|---|---|
 | `GRPOIC_PORT` | `50052` | Listen port |
 | `GRPOIC_MAX_DOCUMENT_MIB` | `70` | Per-document byte cap (`RESOURCE_EXHAUSTED` above it) |
-| `GRPOIC_MAX_CONCURRENT_PARSES` | CPU cores | Parses in flight before queueing |
+| `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Parses in flight before queueing |
 | `GRPOIC_METRICS_INTERVAL_SECONDS` | `60` | Metrics line interval, `0` disables |
 
 Metrics are a stdout line on that interval: `grPOIc metrics:
