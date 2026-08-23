@@ -15,7 +15,6 @@ import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicLong;
 import org.apache.poi.Version;
 
 /**
@@ -40,10 +39,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   private final int maxConcurrentParses;
   private final Semaphore parseSlots;
   private final ExecutorService executor;
-
-  final AtomicLong parsed = new AtomicLong();
-  final AtomicLong rejected = new AtomicLong();
-  final AtomicLong failed = new AtomicLong();
+  private final ParseCounters counters = new ParseCounters();
 
   public PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses,
                              ExecutorService executor) {
@@ -51,6 +47,10 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     this.maxConcurrentParses = maxConcurrentParses;
     this.parseSlots = new Semaphore(maxConcurrentParses);
     this.executor = executor;
+  }
+
+  public ParseCounters counters() {
+    return counters;
   }
 
   @Override
@@ -69,7 +69,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
         }
         if (buffer.size() + (long) chunk.getData().size() > maxDocumentBytes) {
           aborted = true;
-          rejected.incrementAndGet();
+          counters.recordRejected();
           responses.onError(
               Status.RESOURCE_EXHAUSTED
                   .withDescription("document exceeds " + maxDocumentBytes + " bytes")
@@ -93,7 +93,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       public void onCompleted() {
         if (aborted) return;
         if (!sawComplete || buffer.size() == 0) {
-          rejected.incrementAndGet();
+          counters.recordRejected();
           responses.onError(
               Status.INVALID_ARGUMENT
                   .withDescription(buffer.size() == 0
@@ -121,17 +121,17 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     try {
       DocumentParser.parse(documentId, bytes, responses::onNext);
       responses.onCompleted();
-      parsed.incrementAndGet();
+      counters.recordParsed();
     } catch (UnsupportedFormatException unsupported) {
-      rejected.incrementAndGet();
+      counters.recordRejected();
       responses.onError(Status.UNIMPLEMENTED.withDescription(unsupported.getMessage())
           .asRuntimeException());
     } catch (InvalidDocumentException invalid) {
-      rejected.incrementAndGet();
+      counters.recordRejected();
       responses.onError(Status.INVALID_ARGUMENT.withDescription(invalid.getMessage())
           .asRuntimeException());
     } catch (Exception unexpected) {
-      failed.incrementAndGet();
+      counters.recordFailed();
       responses.onError(Status.INTERNAL
           .withDescription("parser fault: " + unexpected.getMessage()).asRuntimeException());
     } finally {

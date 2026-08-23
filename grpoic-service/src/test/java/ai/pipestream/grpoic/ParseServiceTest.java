@@ -1,9 +1,6 @@
 package ai.pipestream.grpoic;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import ai.pipestream.grpoic.server.PoiParseServiceImpl;
 import ai.pipestream.poi.v1.DocumentFormat;
@@ -68,7 +65,7 @@ class ParseServiceTest {
     channel.shutdownNow();
     server.shutdownNow();
     executor.shutdown();
-    assertTrue(channel.awaitTermination(5, TimeUnit.SECONDS), "channel drain");
+    assertThat(channel.awaitTermination(5, TimeUnit.SECONDS)).as("channel drain").isTrue();
   }
 
   // --- fixtures -----------------------------------------------------------
@@ -150,7 +147,7 @@ class ParseServiceTest {
   private record ParseResult(List<ParseEvent> events, Throwable error) {
     ParseStatus status() {
       ParseEvent last = events.get(events.size() - 1);
-      assertTrue(last.hasStatus(), "last event must be the status");
+      assertThat(last.hasStatus()).as("last event must be the status").isTrue();
       return last.getStatus();
     }
   }
@@ -189,15 +186,21 @@ class ParseServiceTest {
       requests.onNext(chunk.build());
     }
     requests.onCompleted();
-    assertTrue(done.await(30, TimeUnit.SECONDS), "parse timed out");
+    assertThat(done.await(30, TimeUnit.SECONDS)).as("parse timed out").isTrue();
     return new ParseResult(events, failure.get());
   }
 
   private static ParseResult parseOk(byte[] bytes, String documentId) throws Exception {
     ParseResult result = parse(bytes, documentId, bytes.length);
-    assertEquals(null, result.error(), "parse must succeed: " + result.error());
-    assertTrue(result.events().get(0).hasDocumentInfo(), "first event is document info");
+    assertThat(result.error()).as("parse must succeed").isNull();
+    assertThat(result.events().get(0).hasDocumentInfo()).as("first event is document info")
+        .isTrue();
     return result;
+  }
+
+  private static Status.Code statusCode(Throwable error) {
+    assertThat(error).isInstanceOf(StatusRuntimeException.class);
+    return ((StatusRuntimeException) error).getStatus().getCode();
   }
 
   // --- tests --------------------------------------------------------------
@@ -206,78 +209,77 @@ class ParseServiceTest {
   void docxRoundTrip() throws Exception {
     ParseResult result = parseOk(docxFixture(), "docx-1");
     var info = result.events().get(0).getDocumentInfo();
-    assertEquals("docx-1", info.getDocumentId());
-    assertEquals(DocumentFormat.DOCUMENT_FORMAT_DOCX, info.getFormat());
-    assertEquals("Quarterly Narrative", info.getMetadata().getTitle());
-    assertEquals("Archivist", info.getMetadata().getAuthor());
-    assertTrue(
-        info.getMetadata().getTailList().stream()
-            .anyMatch(entry -> entry.getKey().equals("custom:approved")
-                && entry.getValues(0).getBoolValue()),
-        "custom property must arrive typed");
+    assertThat(info.getDocumentId()).isEqualTo("docx-1");
+    assertThat(info.getFormat()).isEqualTo(DocumentFormat.DOCUMENT_FORMAT_DOCX);
+    assertThat(info.getMetadata().getTitle()).isEqualTo("Quarterly Narrative");
+    assertThat(info.getMetadata().getAuthor()).isEqualTo("Archivist");
+    assertThat(info.getMetadata().getTailList())
+        .as("custom property must arrive typed")
+        .anyMatch(entry -> entry.getKey().equals("custom:approved")
+            && entry.getValues(0).getBoolValue());
 
     List<ParseEvent> paragraphs =
         result.events().stream().filter(ParseEvent::hasParagraph).toList();
-    assertEquals("Introduction", paragraphs.get(0).getParagraph().getText());
-    assertEquals("Heading1", paragraphs.get(0).getParagraph().getStyle());
+    assertThat(paragraphs.get(0).getParagraph().getText()).isEqualTo("Introduction");
+    assertThat(paragraphs.get(0).getParagraph().getStyle()).isEqualTo("Heading1");
     List<ParseEvent> tables = result.events().stream().filter(ParseEvent::hasTable).toList();
-    assertEquals(1, tables.size());
+    assertThat(tables).hasSize(1);
     var table = tables.get(0).getTable();
-    assertEquals(2, table.getRowsCount());
-    assertEquals("Region", table.getRows(0).getCells(0).getText());
-    assertEquals("1200", table.getRows(1).getCells(1).getText());
-    assertEquals(ParseStatus.State.STATE_OK, result.status().getState());
-    assertEquals(2, result.status().getParagraphs());
-    assertEquals(1, result.status().getTables());
+    assertThat(table.getRowsCount()).isEqualTo(2);
+    assertThat(table.getRows(0).getCells(0).getText()).isEqualTo("Region");
+    assertThat(table.getRows(1).getCells(1).getText()).isEqualTo("1200");
+    assertThat(result.status().getState()).isEqualTo(ParseStatus.State.STATE_OK);
+    assertThat(result.status().getParagraphs()).isEqualTo(2);
+    assertThat(result.status().getTables()).isEqualTo(1);
   }
 
   @Test
   void xlsxRoundTripKeepsTypes() throws Exception {
     ParseResult result = parseOk(xlsxFixture(), "xlsx-1");
-    assertEquals(DocumentFormat.DOCUMENT_FORMAT_XLSX,
-        result.events().get(0).getDocumentInfo().getFormat());
+    assertThat(result.events().get(0).getDocumentInfo().getFormat())
+        .isEqualTo(DocumentFormat.DOCUMENT_FORMAT_XLSX);
     List<ParseEvent> sheets = result.events().stream().filter(ParseEvent::hasSheet).toList();
-    assertEquals(2, sheets.size());
+    assertThat(sheets).hasSize(2);
     var data = sheets.get(0).getSheet();
-    assertEquals("Data", data.getName());
+    assertThat(data.getName()).isEqualTo("Data");
     var valueRow = data.getRows(1);
     SheetCell amount = valueRow.getCells(0);
-    assertEquals(42.5, amount.getNumber());
-    assertTrue(valueRow.getCells(1).getBoolean());
+    assertThat(amount.getNumber()).isEqualTo(42.5);
+    assertThat(valueRow.getCells(1).getBoolean()).isTrue();
     SheetCell formula = valueRow.getCells(2);
-    assertEquals("A2*2", formula.getFormula());
-    assertEquals(85.0, formula.getNumber(), "cached formula result rides the typed value");
-    assertEquals("Empty", sheets.get(1).getSheet().getName());
-    assertEquals(0, sheets.get(1).getSheet().getRowsCount());
-    assertEquals(2, result.status().getSheets());
+    assertThat(formula.getFormula()).isEqualTo("A2*2");
+    assertThat(formula.getNumber())
+        .as("cached formula result rides the typed value")
+        .isEqualTo(85.0);
+    assertThat(sheets.get(1).getSheet().getName()).isEqualTo("Empty");
+    assertThat(sheets.get(1).getSheet().getRowsCount()).isZero();
+    assertThat(result.status().getSheets()).isEqualTo(2);
   }
 
   @Test
   void pptxRoundTrip() throws Exception {
     ParseResult result = parseOk(pptxFixture(), "pptx-1");
-    assertEquals(DocumentFormat.DOCUMENT_FORMAT_PPTX,
-        result.events().get(0).getDocumentInfo().getFormat());
+    assertThat(result.events().get(0).getDocumentInfo().getFormat())
+        .isEqualTo(DocumentFormat.DOCUMENT_FORMAT_PPTX);
     List<ParseEvent> slides = result.events().stream().filter(ParseEvent::hasSlide).toList();
-    assertEquals(1, slides.size());
-    assertEquals(List.of("The archivist's dream machine"),
-        slides.get(0).getSlide().getTextsList());
+    assertThat(slides).hasSize(1);
+    assertThat(slides.get(0).getSlide().getTextsList())
+        .containsExactly("The archivist's dream machine");
   }
 
   @Test
   void legacyXlsAndPptRoundTrip() throws Exception {
     ParseResult xls = parseOk(xlsFixture(), "xls-1");
-    assertEquals(DocumentFormat.DOCUMENT_FORMAT_LEGACY_XLS,
-        xls.events().get(0).getDocumentInfo().getFormat());
-    assertEquals("still works",
-        xls.events().stream().filter(ParseEvent::hasSheet).findFirst().orElseThrow()
-            .getSheet().getRows(0).getCells(0).getText());
+    assertThat(xls.events().get(0).getDocumentInfo().getFormat())
+        .isEqualTo(DocumentFormat.DOCUMENT_FORMAT_LEGACY_XLS);
+    assertThat(xls.events().stream().filter(ParseEvent::hasSheet).findFirst().orElseThrow()
+        .getSheet().getRows(0).getCells(0).getText()).isEqualTo("still works");
 
     ParseResult ppt = parseOk(pptFixture(), "ppt-1");
-    assertEquals(DocumentFormat.DOCUMENT_FORMAT_LEGACY_PPT,
-        ppt.events().get(0).getDocumentInfo().getFormat());
-    assertEquals(List.of("legacy slide text"),
-        ppt.events().stream().filter(ParseEvent::hasSlide).findFirst().orElseThrow()
-            .getSlide().getTextsList());
+    assertThat(ppt.events().get(0).getDocumentInfo().getFormat())
+        .isEqualTo(DocumentFormat.DOCUMENT_FORMAT_LEGACY_PPT);
+    assertThat(ppt.events().stream().filter(ParseEvent::hasSlide).findFirst().orElseThrow()
+        .getSlide().getTextsList()).containsExactly("legacy slide text");
   }
 
   @Test
@@ -285,9 +287,10 @@ class ParseServiceTest {
     byte[] bytes = docxFixture();
     ParseResult whole = parse(bytes, "doc", bytes.length);
     ParseResult chunked = parse(bytes, "doc", 1024);
-    assertEquals(null, chunked.error());
-    assertEquals(whole.events().size(), chunked.events().size(),
-        "chunking must not change the event stream");
+    assertThat(chunked.error()).isNull();
+    assertThat(chunked.events())
+        .as("chunking must not change the event stream")
+        .hasSameSizeAs(whole.events());
   }
 
   @Test
@@ -295,18 +298,16 @@ class ParseServiceTest {
     byte[] noise = new byte[512];
     for (int index = 0; index < noise.length; index++) noise[index] = (byte) (index * 31);
     ParseResult result = parse(noise, "junk", noise.length);
-    assertNotNull(result.error());
-    assertEquals(Status.Code.UNIMPLEMENTED,
-        ((StatusRuntimeException) result.error()).getStatus().getCode());
+    assertThat(result.error()).isNotNull();
+    assertThat(statusCode(result.error())).isEqualTo(Status.Code.UNIMPLEMENTED);
   }
 
   @Test
   void oversizeDocumentIsResourceExhausted() throws Exception {
     byte[] big = new byte[(int) CAP_BYTES + 1];
     ParseResult result = parse(big, "big", big.length);
-    assertNotNull(result.error());
-    assertEquals(Status.Code.RESOURCE_EXHAUSTED,
-        ((StatusRuntimeException) result.error()).getStatus().getCode());
+    assertThat(result.error()).isNotNull();
+    assertThat(statusCode(result.error())).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
   }
 
   @Test
@@ -336,25 +337,24 @@ class ParseServiceTest {
     requests.onNext(ParseRequestChunk.newBuilder().setDocumentId("partial")
         .setData(ByteString.copyFrom(bytes)).build());
     requests.onCompleted();
-    assertTrue(done.await(10, TimeUnit.SECONDS));
-    assertNotNull(failure.get());
-    assertEquals(Status.Code.INVALID_ARGUMENT,
-        ((StatusRuntimeException) failure.get()).getStatus().getCode());
-    assertTrue(events.isEmpty(), "no events before validation");
+    assertThat(done.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(failure.get()).isNotNull();
+    assertThat(statusCode(failure.get())).isEqualTo(Status.Code.INVALID_ARGUMENT);
+    assertThat(events).as("no events before validation").isEmpty();
   }
 
   @Test
   void serviceInfoReportsCapabilities() {
     GetServiceInfoResponse info = PoiParseServiceGrpc.newBlockingStub(channel)
         .getServiceInfo(GetServiceInfoRequest.getDefaultInstance());
-    assertEquals(PoiParseServiceImpl.SERVICE_VERSION, info.getServiceVersion());
-    assertFalse(info.getPoiVersion().isEmpty());
-    assertEquals(6, info.getSupportedFormatsCount());
-    assertEquals(CAP_BYTES, info.getMaxDocumentBytes());
-    assertEquals(4, info.getMaxConcurrentParses());
-    assertEquals("POI", info.getUi().getTitle());
-    assertEquals("/ui/grpoic", info.getUi().getPath());
-    assertFalse(info.getUi().getDescription().isEmpty());
+    assertThat(info.getServiceVersion()).isEqualTo(PoiParseServiceImpl.SERVICE_VERSION);
+    assertThat(info.getPoiVersion()).isNotEmpty();
+    assertThat(info.getSupportedFormatsCount()).isEqualTo(6);
+    assertThat(info.getMaxDocumentBytes()).isEqualTo(CAP_BYTES);
+    assertThat(info.getMaxConcurrentParses()).isEqualTo(4);
+    assertThat(info.getUi().getTitle()).isEqualTo("POI");
+    assertThat(info.getUi().getPath()).isEqualTo("/ui/grpoic");
+    assertThat(info.getUi().getDescription()).isNotEmpty();
   }
 
   @Test
@@ -376,6 +376,6 @@ class ParseServiceTest {
       }));
     }
     for (Thread thread : threads) thread.join(TimeUnit.SECONDS.toMillis(30));
-    assertEquals(null, firstFailure.get(), "all concurrent parses must succeed");
+    assertThat(firstFailure.get()).as("all concurrent parses must succeed").isNull();
   }
 }

@@ -4,8 +4,6 @@ import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
 import ai.pipestream.poi.v1.SheetCell;
 import ai.pipestream.poi.v1.SheetRow;
-import com.google.protobuf.Timestamp;
-import java.util.Date;
 import java.util.function.Consumer;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -59,7 +57,7 @@ final class SpreadsheetParser {
       case BOOLEAN -> converted.setBoolean(cell.getBooleanCellValue());
       case NUMERIC -> {
         if (DateUtil.isCellDateFormatted(cell)) {
-          converted.setDate(timestamp(cell.getDateCellValue()));
+          converted.setDate(ProtoTimestamps.fromDate(cell.getDateCellValue()));
         } else {
           converted.setNumber(cell.getNumericCellValue());
         }
@@ -83,13 +81,5 @@ final class SpreadsheetParser {
       case ERROR -> FormulaError.forInt(cell.getErrorCellValue()).getString();
       default -> "";
     };
-  }
-
-  private static Timestamp timestamp(Date date) {
-    long millis = date.getTime();
-    return Timestamp.newBuilder()
-        .setSeconds(Math.floorDiv(millis, 1000L))
-        .setNanos((int) (Math.floorMod(millis, 1000L) * 1_000_000L))
-        .build();
   }
 }

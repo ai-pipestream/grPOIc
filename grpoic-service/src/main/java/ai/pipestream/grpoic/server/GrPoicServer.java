@@ -6,8 +6,8 @@ import io.grpc.Server;
 import io.grpc.protobuf.services.HealthStatusManager;
 import io.grpc.protobuf.services.ProtoReflectionService;
 import io.grpc.protobuf.services.ProtoReflectionServiceV1;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit;
  */
 public final class GrPoicServer {
 
+  // v1alpha reflection stays registered alongside v1: older grpcurl and
+  // orchestrator builds still dial it, and dropping it would be wire-visible.
+  @SuppressWarnings("deprecation")
   public static void main(String[] args) throws Exception {
     final int port = intFromEnv("GRPOIC_PORT", 50052, 1, 65535);
     final long maxDocumentBytes =
@@ -26,7 +29,7 @@ public final class GrPoicServer {
         intFromEnv("GRPOIC_MAX_CONCURRENT_PARSES", Math.max(2, cores), 1, 256);
     final int metricsInterval = intFromEnv("GRPOIC_METRICS_INTERVAL_SECONDS", 60, 0, 86400);
 
-    ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    var executor = Executors.newVirtualThreadPerTaskExecutor();
     PoiParseServiceImpl service =
         new PoiParseServiceImpl(maxDocumentBytes, maxConcurrent, executor);
     HealthStatusManager health = new HealthStatusManager();
@@ -44,21 +47,7 @@ public final class GrPoicServer {
         + port + " (POI " + org.apache.poi.Version.getVersion() + ", max "
         + (maxDocumentBytes >> 20) + " MiB, " + maxConcurrent + " concurrent parses)");
 
-    if (metricsInterval > 0) {
-      Thread metrics = new Thread(() -> {
-        while (true) {
-          try {
-            TimeUnit.SECONDS.sleep(metricsInterval);
-          } catch (InterruptedException interrupt) {
-            return;
-          }
-          System.out.println("grPOIc metrics: docs{parsed=" + service.parsed.get()
-              + ",rejected=" + service.rejected.get() + ",failed=" + service.failed.get() + "}");
-        }
-      }, "grpoic-metrics");
-      metrics.setDaemon(true);
-      metrics.start();
-    }
+    ScheduledExecutorService metrics = startMetrics(service.counters(), metricsInterval);
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       server.shutdown();
@@ -67,9 +56,23 @@ public final class GrPoicServer {
       } catch (InterruptedException interrupt) {
         server.shutdownNow();
       }
+      if (metrics != null) metrics.shutdownNow();
       executor.shutdown();
     }, "grpoic-shutdown"));
     server.awaitTermination();
+  }
+
+  private static ScheduledExecutorService startMetrics(ParseCounters counters, int intervalSeconds) {
+    if (intervalSeconds <= 0) return null;
+    ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
+      Thread thread = new Thread(task, "grpoic-metrics");
+      thread.setDaemon(true);
+      return thread;
+    });
+    scheduler.scheduleAtFixedRate(
+        () -> System.out.println("grPOIc metrics: " + counters.summary()),
+        intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+    return scheduler;
   }
 
   private static int intFromEnv(String name, int fallback, int min, int max) {

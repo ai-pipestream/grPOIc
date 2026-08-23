@@ -3,8 +3,6 @@ package ai.pipestream.grpoic.parse;
 import ai.pipestream.poi.v1.DocumentMetadata;
 import ai.pipestream.poi.v1.MetadataEntry;
 import ai.pipestream.poi.v1.MetadataValue;
-import com.google.protobuf.Timestamp;
-import java.util.Date;
 import java.util.Optional;
 import org.apache.poi.hpsf.SummaryInformation;
 import org.apache.poi.ooxml.POIXMLDocument;
@@ -28,8 +26,8 @@ public final class MetadataReader {
     core.getTitleProperty().ifPresent(metadata::setTitle);
     core.getCreatorProperty().ifPresent(metadata::setAuthor);
     core.getLastModifiedByProperty().ifPresent(metadata::setLastModifiedBy);
-    core.getCreatedProperty().map(MetadataReader::timestamp).ifPresent(metadata::setCreated);
-    core.getModifiedProperty().map(MetadataReader::timestamp).ifPresent(metadata::setModified);
+    core.getCreatedProperty().map(ProtoTimestamps::fromDate).ifPresent(metadata::setCreated);
+    core.getModifiedProperty().map(ProtoTimestamps::fromDate).ifPresent(metadata::setModified);
     core.getSubjectProperty().ifPresent(value -> addString(metadata, "subject", value));
     core.getKeywordsProperty().ifPresent(value -> addString(metadata, "keywords", value));
     core.getDescriptionProperty().ifPresent(value -> addString(metadata, "description", value));
@@ -62,7 +60,7 @@ public final class MetadataReader {
       } else if (property.isSetBool()) {
         value.setBoolValue(property.getBool());
       } else if (property.isSetFiletime()) {
-        value.setTimestampValue(timestamp(property.getFiletime().getTime()));
+        value.setTimestampValue(ProtoTimestamps.fromDate(property.getFiletime().getTime()));
       } else {
         continue;
       }
@@ -80,10 +78,10 @@ public final class MetadataReader {
     Optional.ofNullable(summary.getAuthor()).ifPresent(metadata::setAuthor);
     Optional.ofNullable(summary.getLastAuthor()).ifPresent(metadata::setLastModifiedBy);
     Optional.ofNullable(summary.getCreateDateTime())
-        .map(MetadataReader::timestamp)
+        .map(ProtoTimestamps::fromDate)
         .ifPresent(metadata::setCreated);
     Optional.ofNullable(summary.getLastSaveDateTime())
-        .map(MetadataReader::timestamp)
+        .map(ProtoTimestamps::fromDate)
         .ifPresent(metadata::setModified);
     Optional.ofNullable(summary.getApplicationName())
         .filter(name -> !name.isEmpty())
@@ -109,13 +107,5 @@ public final class MetadataReader {
         MetadataEntry.newBuilder()
             .setKey(key)
             .addValues(MetadataValue.newBuilder().setIntValue(value)));
-  }
-
-  private static Timestamp timestamp(Date date) {
-    long millis = date.getTime();
-    return Timestamp.newBuilder()
-        .setSeconds(Math.floorDiv(millis, 1000L))
-        .setNanos((int) (Math.floorMod(millis, 1000L) * 1_000_000L))
-        .build();
   }
 }
