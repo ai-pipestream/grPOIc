@@ -1,9 +1,11 @@
 [versions]
 grpc = "1.83.1"
-protobuf = "4.35.1"
+protobuf = "4.36.0"
 poi = "5.5.1"
 log4j = "2.26.1"
-junit = "5.14.4"
+junit = "6.1.3"
+assertj = "3.27.7"
+awaitility = "4.3.0"
 protobufPlugin = "0.10.0"
 
 [libraries]
@@ -13,13 +15,14 @@ grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
 grpc-services = { module = "io.grpc:grpc-services", version.ref = "grpc" }
 grpc-inprocess = { module = "io.grpc:grpc-inprocess", version.ref = "grpc" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
-tomcat-annotations = { module = "org.apache.tomcat:annotations-api", version = "6.0.53" }
 poi = { module = "org.apache.poi:poi", version.ref = "poi" }
 poi-ooxml = { module = "org.apache.poi:poi-ooxml", version.ref = "poi" }
 poi-scratchpad = { module = "org.apache.poi:poi-scratchpad", version.ref = "poi" }
 log4j-core = { module = "org.apache.logging.log4j:log4j-core", version.ref = "log4j" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

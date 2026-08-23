@@ -9,7 +9,6 @@ dependencies {
     api(libs.grpc.protobuf)
     api(libs.grpc.stub)
     api(libs.protobuf.java)
-    compileOnly(libs.tomcat.annotations)
 }
 
 protobuf {
