@@ -136,7 +136,8 @@ system and defined names, so cells keep POI's usermodel semantics (types,
 display strings, shared and array formulas) while the reader holds one row.
 Shared-formula masters and array-formula anchors are kept only while a later
 row can use them, at most one of each per column, and are dropped with the
-sheet.
+sheet. A shared-formula cell outside the range its master declares, or in a
+row stored out of order after that range, is skipped with a warning.
 Converted rows still collect in the outgoing Sheet event, so without
 `sheet_batches` a sheet whose rows pass 256 MiB serialized fails the parse
 with `RESOURCE_EXHAUSTED` and a hint to set `sheet_batches`; with batches

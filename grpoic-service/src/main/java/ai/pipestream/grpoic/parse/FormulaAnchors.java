@@ -36,7 +36,10 @@ import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellFormulaType;
  * holds at most {@link #MAX_LIVE} of each. A row stored out of order after
  * its group was dropped renders the cell as POI would without the group:
  * an array-covered cell as its cached value, a shared-formula cell skipped
- * with a warning.
+ * with a warning. The same holds for a shared-formula cell stored below
+ * the range its master declares: the usermodel would still resolve it,
+ * but its group has gone, so it is skipped with a warning. Writers size
+ * that range to cover every cell that uses it.
  *
  * <p><b>Same output.</b> An array-covered cell without a formula of its
  * own is given its anchor's formula text, which is what the usermodel
