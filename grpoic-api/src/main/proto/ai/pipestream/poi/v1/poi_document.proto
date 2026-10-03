@@ -60,7 +60,12 @@ message Paragraph {
 }
 
 // One table cell. Spans cover merged regions; the anchor cell carries the
-// text and the span, covered positions are not repeated.
+// text and the span, covered positions are not repeated. A row lists its
+// cells left to right, so a consumer places each cell at the next grid
+// column that no row span from an earlier row still covers. Grid columns a
+// row leaves empty at its start or end (Word's gridBefore and gridAfter)
+// arrive as one empty cell spanning the gap, so placement never shifts.
+// Both spans are at least 1.
 message TableCell {
   string text = 1;
   uint32 row_span = 2;
