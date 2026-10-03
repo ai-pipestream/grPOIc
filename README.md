@@ -80,15 +80,18 @@ its tab bar.
 **Errors** are gRPC status codes: `INVALID_ARGUMENT` (no bytes, stream ended
 without a chunk marked `complete`, or bytes that claim a supported format but
 are corrupt), `FAILED_PRECONDITION` (the document is encrypted),
-`RESOURCE_EXHAUSTED` (over the byte cap, or the parse ran out of heap or
-stack), `UNIMPLEMENTED` (bytes are not an office format this server parses,
-including the pre-97 binary formats), `INTERNAL` (a fault in grPOIc itself).
-Every failure closes the call, including a parse that dies with an `Error`.
-Damage confined to one element (a cell, a paragraph, a table, a slide shape,
-the property parts) skips that element with a warning and a `STATE_PARTIAL`
-status instead of failing the document. Standard gRPC
-health checking (`grpc.health.v1.Health`) and reflection (v1 and v1alpha) are
-registered:
+`RESOURCE_EXHAUSTED` (over the byte cap, a spreadsheet whose text exceeds the
+limit below, or a parse that ran out of heap or stack), `UNIMPLEMENTED` (bytes
+are not an office format this server parses, including the pre-97 binary
+formats), `DEADLINE_EXCEEDED` (an upload that stalled, see below), `INTERNAL`
+(a fault in grPOIc itself). Every failure closes the call, including a parse
+that dies with an `Error`. Damage confined to one element (a cell, a
+paragraph, a table, a slide shape, the property parts) skips that element
+with a warning and a `STATE_PARTIAL` status instead of failing the document;
+`warnings` keeps the first 20 and then one closing note.
+
+Standard gRPC health checking (`grpc.health.v1.Health`) and reflection (v1
+and v1alpha) are registered:
 
 ```bash
 grpcurl -plaintext localhost:50052 list
