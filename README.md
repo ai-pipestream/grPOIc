@@ -21,7 +21,7 @@ flowchart LR
     client[Client] -->|"chunk stream, complete=true on last"| svc[PoiParseService]
     svc --> magic["FileMagic detection<br/>OOXML vs OLE2"]
     magic -->|OOXML wordprocessingml| word["WordParser<br/>XWPFDocument"]
-    magic -->|OOXML spreadsheetml| xlsx["SpreadsheetParser<br/>XSSFWorkbook"]
+    magic -->|OOXML spreadsheetml| xlsx["SpreadsheetParser<br/>XlsxSheets: rows streamed"]
     magic -->|OOXML presentationml| pptx["SlideShowParser<br/>XMLSlideShow"]
     magic -->|OLE2 WordDocument stream| doc["legacy DOC<br/>HWPFDocument + WordExtractor"]
     magic -->|OLE2 Workbook stream| xls["SpreadsheetParser<br/>HSSFWorkbook"]
@@ -45,22 +45,27 @@ rpc GetServiceInfo(GetServiceInfoRequest) returns (GetServiceInfoResponse);
 `filename` / `content_type` (read from the first chunk; the server detects
 the real format from the bytes and never trusts these), plus a `data` slice
 and a `complete` flag on the last chunk. A single-chunk upload (all bytes
-plus `complete=true`) is the common case.
+plus `complete=true`) is the common case. Setting `sheet_batches` on the
+first chunk opts in to receiving large worksheets in batches (see `Sheet`
+below); it is off by default, so existing clients keep one event per sheet.
 
 **Response.** A `ParseEvent` per event, `oneof event`:
 
 | Event | When | Carries |
 |---|---|---|
 | `DocumentInfo` | first, once | `document_id`, detected `DocumentFormat`, typed `DocumentMetadata` |
-| `Paragraph` | body text, in document order | `text`, the document's style name (`Heading1`, `Normal`, ...) |
-| `Table` | one body table | rows of `TableCell` (text, `row_span`, `col_span`; merged regions carry the span on the anchor cell only) |
-| `Sheet` | one worksheet, streamed as a unit | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped) |
-| `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts`, speaker `notes` |
+| `Paragraph` | body text, in document order; block content controls (a table of contents, a template's fill-in regions) are opened up and their paragraphs and tables emitted in place | `text`, the document's style name (`Heading1`, `Normal`, ...) |
+| `Table` | one body table, or one native table on a slide (right after its `Slide`, with `slide_index` set) | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
+| `Sheet` | one worksheet, as one event by default; with `sheet_batches` requested, a sheet whose rows exceed a batch (about 1 MiB) arrives as several consecutive events with the same `index` and `name`, every batch but the last setting `more_rows`; without it a sheet over 256 MiB of rows fails the call with `RESOURCE_EXHAUSTED` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the sheet's only or last event its `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
+| `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts` (shapes inside groups included, in shape order), speaker `notes` |
 | `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |
 
-Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The format
-is detected from the bytes; the advisory content type is never trusted.
+Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The OOXML
+formats include their template, slideshow and macro-enabled variants (.dotx,
+.docm, .xltx, .xlsm, .xlam, .potx, .ppsx, .pptm, ...); macros are never run,
+and the VBA project part is never read. The format is detected from the
+bytes; the advisory content type is never trusted.
 Spreadsheet cells keep their storage types (string, double, boolean, date).
 Formula cells carry the formula source plus the cached result; formulas are
 never evaluated. Metadata is typed and lossless: well-known core properties as
@@ -75,11 +80,21 @@ below, for orchestrators and tool facades that need capability discovery. Its
 its tab bar.
 
 **Errors** are gRPC status codes: `INVALID_ARGUMENT` (no bytes, stream ended
-without a chunk marked `complete`, unreadable claimed format),
-`RESOURCE_EXHAUSTED` (over the byte cap), `UNIMPLEMENTED` (bytes are not an
-office format this server parses), `INTERNAL` (parser fault). Standard gRPC
-health checking (`grpc.health.v1.Health`) and reflection (v1 and v1alpha) are
-registered:
+without a chunk marked `complete`, or bytes that claim a supported format but
+are corrupt), `FAILED_PRECONDITION` (the document is encrypted),
+`RESOURCE_EXHAUSTED` (over the byte cap, a spreadsheet whose text exceeds the
+limit below, or a parse that ran out of heap or stack), `UNIMPLEMENTED` (bytes
+are not an office format this server parses, including the pre-97 binary
+formats), `DEADLINE_EXCEEDED` (an upload that stalled or ran too long, see
+below), `INTERNAL` (a fault in grPOIc itself). Every failure closes the call,
+including a parse that dies with an `Error`. Damage confined to one element
+(a cell, a sheet row numbered outside the sheet, a paragraph, a table, a
+slide shape, the property parts) skips that element with a warning and a
+`STATE_PARTIAL` status instead of failing the document; `warnings` keeps the
+first 20 and then one closing note.
+
+Standard gRPC health checking (`grpc.health.v1.Health`) and reflection (v1
+and v1alpha) are registered:
 
 ```bash
 grpcurl -plaintext localhost:50052 list
@@ -90,9 +105,39 @@ grpcurl -plaintext localhost:50052 grpc.health.v1.Health/Check
 ## Concurrency model
 
 POI documents are single-threaded; distinct documents on distinct threads is
-the supported pattern. Each parse runs on its own virtual thread, with a
-semaphore bounding concurrent parses. The bound protects heap (POI holds full
-document models in memory), not just CPU.
+the supported pattern. Each call runs on its own virtual thread, and a
+semaphore bounds the documents in flight. A call takes its slot before it
+reads the first chunk and pulls chunks one at a time, so the bound covers
+uploads as well as parses: a queued client's bytes stay in its transport
+window instead of the heap. Chunks are kept as received and joined without
+copying; the parser reads that buffer in place. An admitted upload that sends
+no bytes for 30 seconds, or that is still uploading after 5 minutes, gives
+its slot back (`DEADLINE_EXCEEDED`); empty chunks do not count as progress,
+so a trickling client cannot hold a slot.
+
+Events go out only while the transport is ready for more, so a slow reader
+stalls its own parse instead of piling messages up in the server. A client
+that reads nothing for 60 seconds (`GRPOIC_RESPONSE_STALL_SECONDS`) while an
+event waits has its call failed with `DEADLINE_EXCEEDED` and gives its slot
+back, so a caller that uploads and never reads cannot hold a slot. A cancelled
+or expired call stops waiting, uploading or parsing at the next step, and
+counts as neither parsed nor failed.
+
+OOXML packages are read in place from the upload buffer through the zip's
+central directory: each part inflates as a stream when a parser asks for it,
+and parts nothing reads are never inflated. A package whose central directory
+is damaged falls back to reading the local headers in order.
+
+XLSX worksheets are never loaded whole. Each sheet part is read with StAX one
+`<row>` at a time, and every row becomes a real POI `XSSFRow` bound to a
+scratch workbook that lends it the source's styles, shared strings, date
+system and defined names, so cells keep POI's usermodel semantics (types,
+display strings, shared and array formulas) while the reader holds one row.
+Converted rows still collect in the outgoing Sheet event, so without
+`sheet_batches` a sheet whose rows pass 256 MiB serialized fails the parse
+with `RESOURCE_EXHAUSTED` and a hint to set `sheet_batches`; with batches
+the server holds about 1 MiB of converted rows at a time. DOCX,
+PPTX and the OLE2 formats still load as POI object models.
 
 ## Configuration
 
@@ -100,11 +145,27 @@ document models in memory), not just CPU.
 |---|---|---|
 | `GRPOIC_PORT` | `50052` | Listen port |
 | `GRPOIC_MAX_DOCUMENT_MIB` | `70` | Per-document byte cap (`RESOURCE_EXHAUSTED` above it) |
-| `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Parses in flight before queueing |
+| `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Documents in flight (uploading or parsing) before new calls queue |
 | `GRPOIC_METRICS_INTERVAL_SECONDS` | `60` | Metrics line interval, `0` disables |
+| `GRPOIC_RESPONSE_STALL_SECONDS` | `60` | How long an event may wait for the client to read before the call fails with `DEADLINE_EXCEEDED` and frees its slot |
 
 Metrics are a stdout line on that interval: `grPOIc metrics:
 docs{parsed=N,rejected=N,failed=N}`.
+
+POI's safety limits are JVM-wide and set explicitly from the document cap
+rather than left at library defaults (`PoiLimits`):
+
+| Limit | Value |
+|---|---|
+| Zip entry compression ratio | at most 100:1 (POI's 0.01 minimum inflate ratio) |
+| Inflated size of one zip entry | 16 x the cap, at least 256 MiB |
+| Entries per package | 10,000 |
+| Any single POI allocation | the cap plus 8 MiB (so a length field in a tiny file cannot claim hundreds of MB) |
+| Spreadsheet text per document | 4 characters per byte of the cap, at least 10 Mi characters, each cell also costing 4 characters (`RESOURCE_EXHAUSTED` above it) |
+| Shared strings table | the same character limit, each entry also costing 16 characters for its own weight, charged as the table loads (`RESOURCE_EXHAUSTED` above it) |
+
+POI's temporary-file strategy refuses, and its spill-to-disk switches are
+pinned off, so any code path that would write to disk fails instead.
 
 ## Build and test
 
@@ -137,4 +198,7 @@ docker run --rm --read-only -p 50052:50052 grpoic
 
 The image build runs the full test suite, so an image never ships from a
 tree whose tests did not pass. `--read-only` works because the server never
-writes to disk.
+writes to disk. The JVM sizes its heap at 60% of the container's memory limit
+(`-XX:MaxRAMPercentage=60`); the rest is left for Netty's direct buffers,
+metaspace and thread stacks. A parse that still runs out of heap fails its
+own call with `RESOURCE_EXHAUSTED` and the server keeps serving the others.

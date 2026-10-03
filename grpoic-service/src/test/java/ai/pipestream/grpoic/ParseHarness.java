@@ -64,6 +64,12 @@ final class ParseHarness implements AutoCloseable {
   }
 
   ParseResult parse(byte[] bytes, String documentId, int chunkSize) throws InterruptedException {
+    return parse(bytes, documentId, chunkSize, false);
+  }
+
+  /** As {@link #parse(byte[], String, int)}, opting in to sheet batches when asked. */
+  ParseResult parse(byte[] bytes, String documentId, int chunkSize, boolean sheetBatches)
+      throws InterruptedException {
     List<ParseEvent> events = new ArrayList<>();
     AtomicReference<Throwable> failure = new AtomicReference<>();
     CountDownLatch done = new CountDownLatch(1);
@@ -92,7 +98,7 @@ final class ParseHarness implements AutoCloseable {
       ParseRequestChunk.Builder chunk = ParseRequestChunk.newBuilder()
           .setData(ByteString.copyFrom(bytes, offset, end - offset))
           .setComplete(end == bytes.length);
-      if (offset == 0) chunk.setDocumentId(documentId);
+      if (offset == 0) chunk.setDocumentId(documentId).setSheetBatches(sheetBatches);
       requests.onNext(chunk.build());
     }
     requests.onCompleted();
@@ -101,7 +107,12 @@ final class ParseHarness implements AutoCloseable {
   }
 
   ParseResult parseOk(byte[] bytes, String documentId) throws InterruptedException {
-    ParseResult result = parse(bytes, documentId, bytes.length);
+    return parseOk(bytes, documentId, false);
+  }
+
+  ParseResult parseOk(byte[] bytes, String documentId, boolean sheetBatches)
+      throws InterruptedException {
+    ParseResult result = parse(bytes, documentId, bytes.length, sheetBatches);
     assertThat(result.error()).as("parse must succeed").isNull();
     assertThat(result.events().get(0).hasDocumentInfo()).as("first event is document info")
         .isTrue();
