@@ -32,6 +32,7 @@ import org.junit.jupiter.api.io.TempDir;
 class HostileInputTest {
 
   private static final long CAP = 4L * 1024 * 1024;
+  static final String SPREADSHEETML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
   private static ParseHarness harness;
 
   @BeforeAll
@@ -162,6 +163,40 @@ class HostileInputTest {
       Status status = failure(harness.parse(bytes, "amplified", bytes.length));
       assertThat(status.getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
       assertThat(status.getDescription()).contains("exceeds 1000000 characters");
+    } finally {
+      ZipSecureFile.setMaxTextSize(installed);
+    }
+  }
+
+  /** An XML comment of random letters: filler that keeps a part inside POI's 1:100 ratio. */
+  static String incompressible(int length) {
+    java.util.Random random = new java.util.Random(7);
+    StringBuilder filler = new StringBuilder("<!--");
+    for (int index = 0; index < length; index++) filler.append((char) ('a' + random.nextInt(26)));
+    return filler.append("-->").toString();
+  }
+
+  static byte[] xlsxWithOneString() throws Exception {
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      workbook.createSheet("Sheet").createRow(0).createCell(0).setCellValue("x");
+      workbook.write(out);
+      return out.toByteArray();
+    }
+  }
+
+  @Test
+  void sharedStringsTableIsChargedAsItLoads() throws Exception {
+    // 200,000 empty entries: no text at all, but each one a String in heap.
+    String table = "<sst xmlns=\"" + SPREADSHEETML + "\">" + incompressible(100_000)
+        + "<si><t></t></si>".repeat(200_000) + "</sst>";
+    byte[] bytes = withPart(xlsxWithOneString(), "/xl/sharedStrings.xml", table);
+    long installed = ZipSecureFile.getMaxTextSize();
+    ZipSecureFile.setMaxTextSize(1_000_000);
+    try {
+      Status status = failure(harness.parse(bytes, "strings", bytes.length));
+      assertThat(status.getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
+      assertThat(status.getDescription()).isEqualTo("shared strings exceeds 1000000 characters");
     } finally {
       ZipSecureFile.setMaxTextSize(installed);
     }

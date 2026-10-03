@@ -153,6 +153,7 @@ rather than left at library defaults (`PoiLimits`):
 | Entries per package | 10,000 |
 | Any single POI allocation | the cap plus 8 MiB (so a length field in a tiny file cannot claim hundreds of MB) |
 | Spreadsheet text per document | 4 characters per byte of the cap, at least 10 Mi characters (`RESOURCE_EXHAUSTED` above it) |
+| Shared strings table | the same character limit, each entry also costing 16 characters for its own weight, charged as the table loads (`RESOURCE_EXHAUSTED` above it) |
 
 POI's temporary-file strategy refuses, and its spill-to-disk switches are
 pinned off, so any code path that would write to disk fails instead.

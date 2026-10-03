@@ -40,6 +40,7 @@ import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTWorkbook;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellFormulaType;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.STSheetState;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.WorkbookDocument;
+import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
 
 /**
@@ -65,7 +66,8 @@ import org.xml.sax.SAXException;
  * would inside a fully loaded workbook. The scratch sheet keeps only what
  * later rows refer back to: shared-formula masters and array-formula
  * anchors. Shared strings are held by the read-only SAX table, a plain
- * string list rather than an XMLBeans tree.
+ * string list rather than an XMLBeans tree, and are charged against the
+ * text limit as they load.
  *
  * <p><b>Same sheets, same order.</b> Sheets are taken from the workbook
  * part in workbook order, and only the kinds {@code XSSFWorkbook} loads
@@ -105,7 +107,7 @@ final class XlsxSheets {
     XSSFReader reader = new XSSFReader(container);
     ScratchWorkbook scratch = new ScratchWorkbook(
         reader.getStylesTable(),
-        new StreamedStrings(new ReadOnlySharedStringsTable(container, false)),
+        new StreamedStrings(BudgetedStrings.load(container)),
         workbook.isSetWorkbookPr() && workbook.getWorkbookPr().getDate1904());
 
     List<Worksheet> sheets = new ArrayList<>();
@@ -347,6 +349,71 @@ final class XlsxSheets {
           // the name exists without a formula
         }
       }
+    }
+  }
+
+  /**
+   * The read-only shared strings table, charged against the text limit
+   * while it loads. The table is read whole before the first row, and its
+   * part may inflate to over a gigabyte, so without a charge a 12 MB
+   * workbook of one-character strings fills gigabytes of heap. Each entry
+   * costs {@link #ENTRY_COST} on top of its text: its String and list slot
+   * weigh about 50 bytes of heap even when the text is empty.
+   */
+  static final class BudgetedStrings extends ReadOnlySharedStringsTable {
+    /** Characters charged per entry for its own weight. */
+    static final int ENTRY_COST = 16;
+
+    private final TextBudget budget = new TextBudget("shared strings");
+    // The base class parses in its constructor, before this class's fields
+    // exist; it is built over nothing and fed the part afterwards, with
+    // these flags mirroring its own to tell counted text from the rest.
+    private boolean inText;
+    private boolean inPhonetic;
+
+    private BudgetedStrings() throws IOException, SAXException {
+      super(InputStream.nullInputStream(), false);
+    }
+
+    static BudgetedStrings load(OPCPackage container) throws IOException, SAXException {
+      BudgetedStrings strings = new BudgetedStrings();
+      List<PackagePart> parts =
+          container.getPartsByContentType(XSSFRelation.SHARED_STRINGS.getContentType());
+      // Some workbooks have no shared strings table.
+      if (!parts.isEmpty()) {
+        try (InputStream in = parts.get(0).getInputStream()) {
+          strings.readFrom(in);
+        }
+      }
+      return strings;
+    }
+
+    @Override
+    public void startElement(String uri, String localName, String name, Attributes attributes)
+        throws SAXException {
+      super.startElement(uri, localName, name, attributes);
+      if (uri != null && !uri.equals(MAIN)) return;
+      switch (localName) {
+        case "si" -> budget.spend(ENTRY_COST);
+        case "t" -> inText = true;
+        case "rPh" -> inPhonetic = true;
+        default -> { }
+      }
+    }
+
+    @Override
+    public void endElement(String uri, String localName, String name) throws SAXException {
+      super.endElement(uri, localName, name);
+      if (uri != null && !uri.equals(MAIN)) return;
+      if (localName.equals("t")) inText = false;
+      if (localName.equals("rPh")) inPhonetic = false;
+    }
+
+    @Override
+    public void characters(char[] ch, int start, int length) throws SAXException {
+      super.characters(ch, start, length);
+      // Phonetic runs are not kept (the table is loaded without them).
+      if (inText && !inPhonetic) budget.spend(length);
     }
   }
 

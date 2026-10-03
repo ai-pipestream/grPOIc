@@ -12,7 +12,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -72,7 +71,9 @@ final class SpreadsheetParser {
   /** Per-workbook conversion state: the formatter, the text budget, the batching choice. */
   private static final class Conversion {
     private final DataFormatter formatter = new DataFormatter();
-    private final TextBudget budget = new TextBudget(ZipSecureFile.getMaxTextSize());
+    // A shared string costs its length every time a cell repeats it, so the
+    // cells are charged for what they yield, not for what the file stores.
+    private final TextBudget budget = new TextBudget("spreadsheet text");
     private final boolean batching;
     private final Consumer<ParseEvent> emit;
     private final ParseStatus.Builder status;
@@ -105,7 +106,8 @@ final class SpreadsheetParser {
             continue;
           }
           if (convertedCell == null) continue;
-          budget.spend(convertedCell);
+          budget.spend(convertedCell.getFormatted().length() + convertedCell.getFormula().length()
+              + (convertedCell.hasText() ? convertedCell.getText().length() : 0));
           convertedRow.addCells(convertedCell);
         }
         if (convertedRow.getCellsCount() > 0) batches.add(convertedRow.build());
@@ -235,29 +237,6 @@ final class SpreadsheetParser {
       }
     }
     return converted;
-  }
-
-  /**
-   * Characters of cell text the workbook may still yield. A shared string
-   * costs its length every time a cell repeats it, so a small file cannot
-   * expand into an unbounded stream.
-   */
-  private static final class TextBudget {
-    private final long limit;
-    private long spent;
-
-    TextBudget(long limit) {
-      this.limit = limit;
-    }
-
-    void spend(SheetCell.Builder cell) {
-      spent += cell.getFormatted().length() + cell.getFormula().length()
-          + (cell.hasText() ? cell.getText().length() : 0);
-      if (spent > limit) {
-        throw new DocumentTooLargeException(
-            "spreadsheet text exceeds " + limit + " characters");
-      }
-    }
   }
 
   private static String cachedFormatted(Cell cell, CellType cachedType) {

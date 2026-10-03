@@ -28,7 +28,8 @@ import org.apache.poi.util.TempFileCreationStrategy;
  * <p><b>Text.</b> {@link ZipSecureFile#setMaxTextSize} bounds the characters
  * of text a single document may yield. Spreadsheets enforce it per cell:
  * one shared string referenced by a million cells is the one way output can
- * outgrow its input many times over.
+ * outgrow its input many times over. The shared strings table, read whole
+ * before any row, is charged against the same limit as it loads.
  *
  * <p><b>No temporary files.</b> The service is diskless by doctrine. POI's
  * spill-to-disk switches are pinned off and its temporary-file strategy
