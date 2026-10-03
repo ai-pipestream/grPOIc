@@ -58,7 +58,7 @@ below); it is off by default, so existing clients keep one event per sheet.
 | `Table` | one body table, or one native table on a slide (right after its `Slide`, with `slide_index` set) | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
 | `Sheet` | one worksheet, as one event by default; with `sheet_batches` requested, a sheet whose rows exceed a batch (about 1 MiB) arrives as several consecutive events with the same `index` and `name`, every batch but the last setting `more_rows`; without it a sheet over 256 MiB of rows fails the call with `RESOURCE_EXHAUSTED` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the sheet's only or last event its `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
 | `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts` (shapes inside groups included, in shape order), speaker `notes` |
-| `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
+| `EmbeddedObject` | one embedded part the document carries (a linked object, whose target is outside the package, is not listed) | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |
 
 Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The OOXML
@@ -86,10 +86,11 @@ are corrupt), `FAILED_PRECONDITION` (the document is encrypted),
 limit below, or a parse that ran out of heap or stack), `UNIMPLEMENTED` (bytes
 are not an office format this server parses, including the pre-97 binary
 formats), `DEADLINE_EXCEEDED` (an upload that stalled or ran too long, see
-below), `INTERNAL` (a fault in grPOIc itself). Every failure closes the call,
+below), `INTERNAL` (a fault in grPOIc itself; the description names the exception
+type only, never its message). Every failure closes the call,
 including a parse that dies with an `Error`. Damage confined to one element
 (a cell, a sheet row numbered outside the sheet, a paragraph, a table, a
-slide shape, the property parts) skips that element with a warning and a
+slide shape, an embedded object, the property parts) skips that element with a warning and a
 `STATE_PARTIAL` status instead of failing the document; `warnings` keeps the
 first 20 and then one closing note.
 
@@ -133,6 +134,10 @@ XLSX worksheets are never loaded whole. Each sheet part is read with StAX one
 scratch workbook that lends it the source's styles, shared strings, date
 system and defined names, so cells keep POI's usermodel semantics (types,
 display strings, shared and array formulas) while the reader holds one row.
+Shared-formula masters and array-formula anchors are kept only while a later
+row can use them, at most one of each per column, and are dropped with the
+sheet. A shared-formula cell outside the range its master declares, or in a
+row stored out of order after that range, is skipped with a warning.
 Converted rows still collect in the outgoing Sheet event, so without
 `sheet_batches` a sheet whose rows pass 256 MiB serialized fails the parse
 with `RESOURCE_EXHAUSTED` and a hint to set `sheet_batches`; with batches

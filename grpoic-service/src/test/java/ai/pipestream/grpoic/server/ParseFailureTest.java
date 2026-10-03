@@ -105,6 +105,17 @@ class ParseFailureTest {
     assertThat(outcome.status().getDescription()).isEqualTo("parser fault: NoClassDefFoundError");
   }
 
+  @Test
+  void serverFaultDescriptionsNameTheTypeWithoutItsMessage() throws Exception {
+    Outcome outcome = parseWith((id, bytes, options, emit) -> {
+      throw new IllegalStateException("cell text: Quarterly salaries for J. Doe");
+    });
+    assertThat(outcome.status().getCode()).isEqualTo(Status.Code.INTERNAL);
+    assertThat(outcome.status().getDescription())
+        .as("a message may quote the document and must not leave in the status")
+        .isEqualTo("parser fault: IllegalStateException");
+  }
+
   private static int recurse(int depth) {
     return recurse(depth + 1) + 1;
   }

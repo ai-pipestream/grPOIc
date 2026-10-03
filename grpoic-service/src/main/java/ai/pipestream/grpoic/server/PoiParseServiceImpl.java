@@ -254,7 +254,9 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       } catch (RuntimeException unexpected) {
         if (!cancelled) {
           counters.recordFailed();
-          fail(Status.INTERNAL.withDescription("upload fault: " + unexpected.getMessage()));
+          // The type only: a message can quote request or document content.
+          fail(Status.INTERNAL
+              .withDescription("upload fault: " + unexpected.getClass().getSimpleName()));
         }
       } finally {
         parseSlots.release();
@@ -353,7 +355,9 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       } catch (Exception unexpected) {
         if (cancelled) return;
         counters.recordFailed();
-        fail(Status.INTERNAL.withDescription("parser fault: " + unexpected.getMessage()));
+        // The type only: POI messages can quote document content.
+        fail(Status.INTERNAL
+            .withDescription("parser fault: " + unexpected.getClass().getSimpleName()));
       } catch (OutOfMemoryError exhausted) {
         // The document's allocations become unreachable as the stack unwinds,
         // so the call can still be failed; rethrown so the log shows it.

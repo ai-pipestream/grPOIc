@@ -82,7 +82,7 @@ final class SpreadsheetParser {
     Conversion conversion = new Conversion(options, emit, status, UNBATCHED_SHEET_BYTES);
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
-      try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
+      try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet, status)) {
         conversion.sheet(index++, sheet.name(), sheet.hidden(), rows,
             () -> conversion.ranges(sheet.name(), rows.mergedReferences()));
         if (rows.skippedRows() > 0) {

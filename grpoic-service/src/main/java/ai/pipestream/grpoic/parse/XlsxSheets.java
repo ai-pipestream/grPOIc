@@ -10,6 +10,8 @@ import java.util.NoSuchElementException;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
+import org.apache.poi.ooxml.POIXMLDocumentPart;
+import org.apache.poi.ooxml.POIXMLRelation;
 import org.apache.poi.ooxml.POIXMLTypeLoader;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import org.apache.poi.openxml4j.exceptions.OpenXML4JException;
@@ -18,7 +20,6 @@ import org.apache.poi.openxml4j.opc.PackagePart;
 import org.apache.poi.openxml4j.opc.PackageRelationship;
 import org.apache.poi.openxml4j.opc.PackageRelationshipTypes;
 import org.apache.poi.ss.SpreadsheetVersion;
-import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.RichTextString;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.util.XMLHelper;
@@ -27,6 +28,7 @@ import org.apache.poi.xssf.eventusermodel.XSSFReader;
 import org.apache.poi.xssf.model.SharedStringsTable;
 import org.apache.poi.xssf.model.StylesTable;
 import org.apache.poi.xssf.usermodel.XSSFCell;
+import org.apache.poi.xssf.usermodel.XSSFFactory;
 import org.apache.poi.xssf.usermodel.XSSFName;
 import org.apache.poi.xssf.usermodel.XSSFRelation;
 import org.apache.poi.xssf.usermodel.XSSFRow;
@@ -34,12 +36,11 @@ import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.xmlbeans.XmlException;
 import org.apache.xmlbeans.XmlOptions;
-import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCell;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCellFormula;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTDefinedName;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTRow;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTSheet;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTWorkbook;
-import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellFormulaType;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.STSheetState;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.WorkbookDocument;
 import org.xml.sax.Attributes;
@@ -65,9 +66,10 @@ import org.xml.sax.SAXException;
  * source's styles, shared strings, date system, sheet names and defined
  * names, so every {@link XSSFCell} computes its type, value, formula
  * (shared and array formulas included) and display string exactly as it
- * would inside a fully loaded workbook. The scratch sheet keeps only what
- * later rows refer back to: shared-formula masters and array-formula
- * anchors. Shared strings are held by the read-only SAX table, a plain
+ * would inside a fully loaded workbook. What later rows refer back to
+ * (shared-formula masters and array-formula anchors) is held by
+ * {@link FormulaAnchors} only while a later row can need it, so the
+ * scratch sheet itself records nothing. Shared strings are held by the read-only SAX table, a plain
  * string list rather than an XMLBeans tree, and are charged against the
  * text limit as they load.
  *
@@ -90,7 +92,7 @@ final class XlsxSheets {
   }
 
   /** One worksheet: its name, visibility, part, and the scratch sheet its rows bind to. */
-  record Worksheet(String name, boolean hidden, PackagePart part, XSSFSheet scratch) {}
+  record Worksheet(String name, boolean hidden, PackagePart part, ScratchSheet scratch) {}
 
   private final List<Worksheet> sheets;
   private final ScratchWorkbook scratch;
@@ -150,29 +152,20 @@ final class XlsxSheets {
     return sheets;
   }
 
-  /** The OLE and package embeddings of every sheet, as XSSFWorkbook lists them. */
+  /** The OLE and package embeddings of every sheet; see {@link EmbeddedObjectParser#embeddings}. */
   List<PackagePart> embeddedParts() throws InvalidFormatException {
-    List<PackagePart> parts = new ArrayList<>();
-    for (Worksheet sheet : sheets) {
-      for (String type : List.of(XSSFRelation.OLEEMBEDDINGS.getRelation(),
-                                 XSSFRelation.PACKEMBEDDINGS.getRelation())) {
-        for (PackageRelationship relationship : sheet.part().getRelationshipsByType(type)) {
-          parts.add(sheet.part().getRelatedPart(relationship));
-        }
-      }
-    }
-    return parts;
+    return EmbeddedObjectParser.embeddings(sheets.stream().map(Worksheet::part).toList());
   }
 
   /**
    * The sheet's rows in stored order, each a real XSSFRow. Single use; the
    * part stream closes when the rows run out or {@link Rows#close()} runs.
    */
-  static Rows rows(Worksheet sheet) throws IOException {
+  static Rows rows(Worksheet sheet, ParseStatus.Builder status) throws IOException {
     InputStream in = sheet.part().getInputStream();
     try {
-      return new Rows(
-          XMLHelper.newXMLInputFactory().createXMLStreamReader(in), in, sheet.scratch());
+      return new Rows(XMLHelper.newXMLInputFactory().createXMLStreamReader(in), in,
+          sheet.scratch(), new FormulaAnchors(sheet.name(), status));
     } catch (XMLStreamException error) {
       in.close();
       throw new InvalidDocumentException("unreadable worksheet: " + error.getMessage(), error);
@@ -195,7 +188,8 @@ final class XlsxSheets {
   static final class Rows implements Iterator<Row>, AutoCloseable {
     private final XMLStreamReader reader;
     private final InputStream in;
-    private final XSSFSheet scratch;
+    private final ScratchSheet scratch;
+    private final FormulaAnchors anchors;
     private final List<String> mergedReferences = new ArrayList<>();
     private boolean inSheetData;
     private boolean inMergeCells;
@@ -204,10 +198,13 @@ final class XlsxSheets {
     private Row next;
     private boolean done;
 
-    private Rows(XMLStreamReader reader, InputStream in, XSSFSheet scratch) {
+    private Rows(XMLStreamReader reader, InputStream in, ScratchSheet scratch,
+                 FormulaAnchors anchors) {
       this.reader = reader;
       this.in = in;
       this.scratch = scratch;
+      this.anchors = anchors;
+      scratch.anchors = anchors;
     }
 
     @Override
@@ -230,6 +227,11 @@ final class XlsxSheets {
      */
     List<String> mergedReferences() {
       return mergedReferences;
+    }
+
+    /** Shared-formula masters and array anchors held right now, for tests. */
+    int liveFormulaGroups() {
+      return anchors.live();
     }
 
     /** Rows skipped for a number outside the sheet, final once the rows have run out. */
@@ -281,30 +283,47 @@ final class XlsxSheets {
     }
 
     private Row row(CTRow stored) {
-      XSSFRow row = new StreamedRow(stored, scratch);
-      for (Cell cell : row) {
-        CTCell source = ((XSSFCell) cell).getCTCell();
-        if (source.isSetF() && source.getF().getT() == STCellFormulaType.ARRAY
-            && source.getF().isSetRef()) {
-          // The cells an array formula covers ask the sheet for its anchor.
-          XSSFRow anchors = scratch.getRow(cell.getRowIndex());
-          if (anchors == null) anchors = scratch.createRow(cell.getRowIndex());
-          anchors.createCell(cell.getColumnIndex()).getCTCell().set(source.copy());
-        }
-      }
-      return row;
+      anchors.prepare(stored, (int) (stored.getR() - 1));
+      return new StreamedRow(stored, scratch);
     }
 
     @Override
     public void close() {
       if (done) return;
       done = true;
+      // The sheet's formula groups go with its rows, not with the workbook.
+      if (scratch.anchors == anchors) scratch.anchors = null;
       try {
         reader.close();
         in.close();
       } catch (XMLStreamException | IOException ignored) {
         // in-memory sources; nothing to recover
       }
+    }
+  }
+
+  /**
+   * The sheet streamed rows bind to. It answers shared-formula lookups
+   * from the open sheet's {@link FormulaAnchors} instead of from the
+   * private map {@code XSSFSheet} would fill as rows bind.
+   */
+  static final class ScratchSheet extends XSSFSheet {
+    private FormulaAnchors anchors;
+
+    @Override
+    public CTCellFormula getSharedFormula(int sid) {
+      return anchors == null ? null : anchors.shared(sid);
+    }
+  }
+
+  /** Creates {@link ScratchSheet}s where XSSFWorkbook would create plain worksheets. */
+  private static final class ScratchFactory extends XSSFFactory {
+    static final ScratchFactory INSTANCE = new ScratchFactory();
+
+    @Override
+    public POIXMLDocumentPart newDocumentPart(POIXMLRelation descriptor) {
+      return descriptor == XSSFRelation.WORKSHEET ? new ScratchSheet()
+          : super.newDocumentPart(descriptor);
     }
   }
 
@@ -326,6 +345,7 @@ final class XlsxSheets {
     private final boolean date1904;
 
     ScratchWorkbook(StylesTable styles, SharedStringsTable strings, boolean date1904) {
+      super(ScratchFactory.INSTANCE);
       this.styles = styles;
       this.strings = strings;
       this.date1904 = date1904;
@@ -349,8 +369,8 @@ final class XlsxSheets {
     }
 
     /** A sheet for each source sheet, by position; names here are internal only. */
-    XSSFSheet addSheet(int index) {
-      return createSheet("sheet" + (index + 1));
+    ScratchSheet addSheet(int index) {
+      return (ScratchSheet) createSheet("sheet" + (index + 1));
     }
 
     /**
