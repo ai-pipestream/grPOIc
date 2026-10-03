@@ -7,7 +7,11 @@ import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.hwpf.HWPFDocument;
@@ -18,8 +22,11 @@ import org.apache.poi.poifs.filesystem.DirectoryNode;
 import org.apache.poi.poifs.filesystem.FileMagic;
 import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFRelation;
+import org.apache.poi.xssf.usermodel.XSSFRelation;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFRelation;
 
 /**
  * Detects the format from the bytes (the advisory content type is never
@@ -29,6 +36,28 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
  * parser classes; this class only detects, dispatches, and frames the stream.
  */
 public final class DocumentParser {
+
+  // Main-part content types per family: documents, templates, and their
+  // macro-enabled variants. Macros are never run; POI has no VBA engine and
+  // the vbaProject part is never read.
+  private static final Set<String> WORD_TYPES = contentTypes(
+      XWPFRelation.DOCUMENT.getContentType(),
+      XWPFRelation.TEMPLATE.getContentType(),
+      XWPFRelation.MACRO_DOCUMENT.getContentType(),
+      XWPFRelation.MACRO_TEMPLATE_DOCUMENT.getContentType());
+  private static final Set<String> SPREADSHEET_TYPES = contentTypes(
+      XSSFRelation.WORKBOOK.getContentType(),
+      XSSFRelation.TEMPLATE_WORKBOOK.getContentType(),
+      XSSFRelation.MACROS_WORKBOOK.getContentType(),
+      XSSFRelation.MACRO_TEMPLATE_WORKBOOK.getContentType(),
+      XSSFRelation.MACRO_ADDIN_WORKBOOK.getContentType());
+  private static final Set<String> PRESENTATION_TYPES = contentTypes(
+      XSLFRelation.MAIN.getContentType(),
+      XSLFRelation.PRESENTATIONML.getContentType(),
+      XSLFRelation.PRESENTATIONML_TEMPLATE.getContentType(),
+      XSLFRelation.PRESENTATION_MACRO.getContentType(),
+      XSLFRelation.MACRO.getContentType(),
+      XSLFRelation.MACRO_TEMPLATE.getContentType());
 
   private DocumentParser() {}
 
@@ -50,7 +79,8 @@ public final class DocumentParser {
       throws IOException {
     try (OPCPackage container = openPackage(bytes)) {
       String coreType = coreContentType(container);
-      if (coreType.contains("wordprocessingml")) {
+      String normalized = coreType.toLowerCase(Locale.ROOT);
+      if (WORD_TYPES.contains(normalized)) {
         try (XWPFDocument document = new XWPFDocument(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_DOCX,
               MetadataReader.read(document), emit);
@@ -58,7 +88,7 @@ public final class DocumentParser {
           EmbeddedObjectParser.parse(document, emit, status);
           finish(status, emit);
         }
-      } else if (coreType.contains("spreadsheetml")) {
+      } else if (SPREADSHEET_TYPES.contains(normalized)) {
         try (XSSFWorkbook workbook = new XSSFWorkbook(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_XLSX,
               MetadataReader.read(workbook), emit);
@@ -66,7 +96,7 @@ public final class DocumentParser {
           EmbeddedObjectParser.parse(workbook, emit, status);
           finish(status, emit);
         }
-      } else if (coreType.contains("presentationml")) {
+      } else if (PRESENTATION_TYPES.contains(normalized)) {
         try (XMLSlideShow show = new XMLSlideShow(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_PPTX,
               MetadataReader.read(show), emit);
@@ -135,6 +165,12 @@ public final class DocumentParser {
     } catch (Exception error) {
       throw new InvalidDocumentException("unreadable OOXML container", error);
     }
+  }
+
+  private static Set<String> contentTypes(String... types) {
+    return Arrays.stream(types)
+        .map(type -> type.toLowerCase(Locale.ROOT))
+        .collect(Collectors.toUnmodifiableSet());
   }
 
   private static String coreContentType(OPCPackage container) {

@@ -59,8 +59,11 @@ plus `complete=true`) is the common case.
 | `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |
 
-Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The format
-is detected from the bytes; the advisory content type is never trusted.
+Formats: DOCX, XLSX, PPTX and the OLE2 legacy trio DOC, XLS, PPT. The OOXML
+formats include their template, slideshow and macro-enabled variants (.dotx,
+.docm, .xltx, .xlsm, .xlam, .potx, .ppsx, .pptm, ...); macros are never run,
+and the VBA project part is never read. The format is detected from the
+bytes; the advisory content type is never trusted.
 Spreadsheet cells keep their storage types (string, double, boolean, date).
 Formula cells carry the formula source plus the cached result; formulas are
 never evaluated. Metadata is typed and lossless: well-known core properties as
