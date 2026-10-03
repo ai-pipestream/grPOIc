@@ -13,6 +13,8 @@ import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseRequestChunk;
 import ai.pipestream.poi.v1.PoiParseServiceGrpc;
 import ai.pipestream.poi.v1.UiInfo;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
@@ -49,7 +51,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   /** The parse step, separate so tests can fail it in ways no document reliably does. */
   @FunctionalInterface
   interface Parser {
-    void parse(String documentId, byte[] bytes, Consumer<ParseEvent> emit);
+    void parse(String documentId, ByteString data, Consumer<ParseEvent> emit);
   }
 
   private final long maxDocumentBytes;
@@ -128,14 +130,15 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
                   .asRuntimeException());
           return;
         }
-        byte[] bytes = buffer.toByteArray();
+        // The array is fresh and never written again, so wrapping it is safe.
+        ByteString data = UnsafeByteOperations.unsafeWrap(buffer.toByteArray());
         String id = documentId;
-        executor.execute(() -> parseNow(id, bytes, responses));
+        executor.execute(() -> parseNow(id, data, responses));
       }
     };
   }
 
-  private void parseNow(String documentId, byte[] bytes, StreamObserver<ParseEvent> responses) {
+  private void parseNow(String documentId, ByteString data, StreamObserver<ParseEvent> responses) {
     try {
       parseSlots.acquire();
     } catch (InterruptedException interrupt) {
@@ -145,7 +148,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       return;
     }
     try {
-      parser.parse(documentId, bytes, responses::onNext);
+      parser.parse(documentId, data, responses::onNext);
       responses.onCompleted();
       counters.recordParsed();
     } catch (UnsupportedFormatException unsupported) {

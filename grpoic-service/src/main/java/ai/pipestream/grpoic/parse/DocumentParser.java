@@ -5,7 +5,7 @@ import ai.pipestream.poi.v1.DocumentInfo;
 import ai.pipestream.poi.v1.DocumentMetadata;
 import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
-import java.io.ByteArrayInputStream;
+import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Locale;
@@ -34,8 +34,8 @@ import org.apache.poi.xwpf.usermodel.XWPFRelation;
 /**
  * Detects the format from the bytes (the advisory content type is never
  * trusted) and streams typed events: DocumentInfo first, content blocks in
- * document order, ParseStatus last. Entirely in memory; nothing is written to
- * disk and no process is executed. Per-format extraction lives in the sibling
+ * document order, ParseStatus last. Entirely in memory, read in place from
+ * the upload buffer; nothing is written to disk and no process is executed. Per-format extraction lives in the sibling
  * parser classes; this class only detects, dispatches, and frames the stream.
  */
 public final class DocumentParser {
@@ -71,12 +71,12 @@ public final class DocumentParser {
    * but are broken), {@link ProtectedDocumentException} (encrypted). Anything
    * else escaping is a server fault, including whatever {@code emit} throws.
    */
-  public static void parse(String documentId, byte[] bytes, Consumer<ParseEvent> emit) {
-    FileMagic magic = FileMagic.valueOf(bytes);
+  public static void parse(String documentId, ByteString data, Consumer<ParseEvent> emit) {
+    FileMagic magic = FileMagic.valueOf(data.substring(0, Math.min(data.size(), 64)).toByteArray());
     try {
       switch (magic) {
-        case OOXML -> parseOoxml(documentId, bytes, emit);
-        case OLE2 -> parseOle2(documentId, bytes, emit);
+        case OOXML -> parseOoxml(documentId, data, emit);
+        case OLE2 -> parseOle2(documentId, data, emit);
         default -> throw new UnsupportedFormatException(
             "not an office document (magic: " + magic + ")");
       }
@@ -98,9 +98,9 @@ public final class DocumentParser {
     }
   }
 
-  private static void parseOoxml(String documentId, byte[] bytes, Consumer<ParseEvent> emit)
+  private static void parseOoxml(String documentId, ByteString data, Consumer<ParseEvent> emit)
       throws IOException {
-    try (OPCPackage container = openPackage(bytes)) {
+    try (OPCPackage container = openPackage(data)) {
       String coreType = coreContentType(container);
       String normalized = coreType.toLowerCase(Locale.ROOT);
       if (WORD_TYPES.contains(normalized)) {
@@ -133,9 +133,9 @@ public final class DocumentParser {
     }
   }
 
-  private static void parseOle2(String documentId, byte[] bytes, Consumer<ParseEvent> emit)
+  private static void parseOle2(String documentId, ByteString data, Consumer<ParseEvent> emit)
       throws IOException {
-    try (POIFSFileSystem container = new POIFSFileSystem(new ByteArrayInputStream(bytes))) {
+    try (POIFSFileSystem container = new POIFSFileSystem(data.newInput())) {
       DirectoryNode root = container.getRoot();
       if (root.hasEntryCaseInsensitive("EncryptedPackage")) {
         // An encrypted DOCX/XLSX/PPTX travels as an OLE2 container holding
@@ -198,9 +198,9 @@ public final class DocumentParser {
     emit.accept(ParseEvent.newBuilder().setStatus(status).build());
   }
 
-  private static OPCPackage openPackage(byte[] bytes) {
+  private static OPCPackage openPackage(ByteString data) {
     try {
-      return OPCPackage.open(new ByteArrayInputStream(bytes));
+      return InMemoryPackages.open(data);
     } catch (Exception error) {
       throw new InvalidDocumentException("unreadable OOXML container", error);
     }

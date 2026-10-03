@@ -103,6 +103,11 @@ the supported pattern. Each parse runs on its own virtual thread, with a
 semaphore bounding concurrent parses. The bound protects heap (POI holds full
 document models in memory), not just CPU.
 
+OOXML packages are read in place from the upload buffer through the zip's
+central directory: each part inflates as a stream when a parser asks for it,
+and parts nothing reads are never inflated. A package whose central directory
+is damaged falls back to reading the local headers in order.
+
 ## Configuration
 
 | Variable | Default | Meaning |
