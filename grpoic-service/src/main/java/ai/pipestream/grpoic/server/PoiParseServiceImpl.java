@@ -1,7 +1,9 @@
 package ai.pipestream.grpoic.server;
 
 import ai.pipestream.grpoic.parse.DocumentParser;
+import ai.pipestream.grpoic.parse.DocumentTooLargeException;
 import ai.pipestream.grpoic.parse.InvalidDocumentException;
+import ai.pipestream.grpoic.parse.PoiLimits;
 import ai.pipestream.grpoic.parse.ProtectedDocumentException;
 import ai.pipestream.grpoic.parse.UnsupportedFormatException;
 import ai.pipestream.poi.v1.DocumentFormat;
@@ -69,6 +71,8 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     this.parseSlots = new Semaphore(maxConcurrentParses);
     this.executor = executor;
     this.parser = parser;
+    // POI's limits are JVM-wide; they follow the cap of the server in it.
+    PoiLimits.install(maxDocumentBytes);
   }
 
   public ParseCounters counters() {
@@ -153,6 +157,9 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     } catch (ProtectedDocumentException encrypted) {
       counters.recordRejected();
       fail(responses, Status.FAILED_PRECONDITION.withDescription(encrypted.getMessage()));
+    } catch (DocumentTooLargeException tooLarge) {
+      counters.recordRejected();
+      fail(responses, Status.RESOURCE_EXHAUSTED.withDescription(tooLarge.getMessage()));
     } catch (Exception unexpected) {
       counters.recordFailed();
       fail(responses, Status.INTERNAL.withDescription("parser fault: " + unexpected.getMessage()));

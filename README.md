@@ -115,6 +115,20 @@ document models in memory), not just CPU.
 Metrics are a stdout line on that interval: `grPOIc metrics:
 docs{parsed=N,rejected=N,failed=N}`.
 
+POI's safety limits are JVM-wide and set explicitly from the document cap
+rather than left at library defaults (`PoiLimits`):
+
+| Limit | Value |
+|---|---|
+| Zip entry compression ratio | at most 100:1 (POI's 0.01 minimum inflate ratio) |
+| Inflated size of one zip entry | 16 x the cap, at least 256 MiB |
+| Entries per package | 10,000 |
+| Any single POI allocation | the cap plus 8 MiB (so a length field in a tiny file cannot claim hundreds of MB) |
+| Spreadsheet text per document | 4 characters per byte of the cap, at least 10 Mi characters (`RESOURCE_EXHAUSTED` above it) |
+
+POI's temporary-file strategy refuses, and its spill-to-disk switches are
+pinned off, so any code path that would write to disk fails instead.
+
 ## Build and test
 
 ```bash

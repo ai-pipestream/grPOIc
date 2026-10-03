@@ -7,6 +7,7 @@ import ai.pipestream.poi.v1.SheetRow;
 import java.util.function.Consumer;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.FormulaError;
@@ -26,6 +27,7 @@ final class SpreadsheetParser {
 
   static void parse(Workbook workbook, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
     DataFormatter formatter = new DataFormatter();
+    TextBudget budget = new TextBudget(ZipSecureFile.getMaxTextSize());
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
       ai.pipestream.poi.v1.Sheet.Builder converted =
@@ -43,7 +45,9 @@ final class SpreadsheetParser {
                 + new CellAddress(cell).formatAsString(), error);
             continue;
           }
-          if (convertedCell != null) convertedRow.addCells(convertedCell);
+          if (convertedCell == null) continue;
+          budget.spend(convertedCell);
+          convertedRow.addCells(convertedCell);
         }
         if (convertedRow.getCellsCount() > 0) converted.addRows(convertedRow);
       }
@@ -81,6 +85,29 @@ final class SpreadsheetParser {
       }
     }
     return converted;
+  }
+
+  /**
+   * Characters of cell text the workbook may still yield. A shared string
+   * costs its length every time a cell repeats it, so a small file cannot
+   * expand into an unbounded stream.
+   */
+  private static final class TextBudget {
+    private final long limit;
+    private long spent;
+
+    TextBudget(long limit) {
+      this.limit = limit;
+    }
+
+    void spend(SheetCell.Builder cell) {
+      spent += cell.getFormatted().length() + cell.getFormula().length()
+          + (cell.hasText() ? cell.getText().length() : 0);
+      if (spent > limit) {
+        throw new DocumentTooLargeException(
+            "spreadsheet text exceeds " + limit + " characters");
+      }
+    }
   }
 
   private static String cachedFormatted(Cell cell, CellType cachedType) {
