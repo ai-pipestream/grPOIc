@@ -171,6 +171,45 @@ class XlsxStreamingParityTest {
   }
 
   @Test
+  void formulaGroupsThatCloseAndReopenDownTheSheetMatch() throws Exception {
+    // Groups end and new ones start as the rows advance, so the streaming
+    // path drops passed groups; a master that is not its range's top left
+    // and a covered cell with an empty formula of its own are included.
+    byte[] base;
+    try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+      workbook.createSheet("Groups");
+      workbook.createSheet("After").createRow(0).createCell(0).setCellValue(1);
+      base = write(workbook);
+    }
+    StringBuilder rows = new StringBuilder();
+    for (int r = 1; r <= 30; r++) {
+      rows.append("<row r=\"").append(r).append("\"><c r=\"A").append(r).append("\"><v>")
+          .append(r).append("</v></c>");
+      if (r % 3 == 1) {
+        rows.append("<c r=\"B").append(r).append("\"><f t=\"array\" ref=\"B").append(r)
+            .append(":C").append(r + 2).append("\">A").append(r).append("+A").append(r + 1)
+            .append("</f><v>1</v></c><c r=\"C").append(r).append("\"><f></f><v>1</v></c>");
+      } else {
+        rows.append("<c r=\"B").append(r).append("\"><v>1</v></c><c r=\"C").append(r)
+            .append("\"><v>1</v></c>");
+      }
+      int group = (r - 1) / 4;
+      if ((r - 1) % 4 == 1) {
+        rows.append("<c r=\"D").append(r).append("\"><f t=\"shared\" ref=\"D").append(r - 1)
+            .append(":E").append(r + 2).append("\" si=\"").append(group).append("\">$A")
+            .append(r).append("*2</f><v>2</v></c>");
+      } else if ((r - 1) % 4 != 0) {
+        rows.append("<c r=\"D").append(r).append("\"><f t=\"shared\" si=\"").append(group)
+            .append("\"/><v>2</v></c>");
+      }
+      rows.append("<c r=\"E").append(r).append("\"><v>3</v></c></row>");
+    }
+    String sheet = "<worksheet xmlns=\"" + NS + "\"><sheetData>" + rows
+        + "</sheetData></worksheet>";
+    assertParity(withParts(base, "/xl/worksheets/sheet1.xml", sheet));
+  }
+
+  @Test
   void phoneticRunsAndTheNineteenFourDateSystemMatch() throws Exception {
     byte[] base;
     try (XSSFWorkbook workbook = new XSSFWorkbook()) {
