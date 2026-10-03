@@ -109,7 +109,7 @@ class CallLifecycleTest {
   @Test
   void slowReaderStallsTheParseInsteadOfQueueingEvents() throws Exception {
     AtomicInteger emitted = new AtomicInteger();
-    start(2, (id, data, emit) -> {
+    start(2, (id, data, options, emit) -> {
       for (int number = 0; number < 100; number++) {
         emit.accept(event(number));
         emitted.incrementAndGet();
@@ -132,7 +132,7 @@ class CallLifecycleTest {
   @Test
   void cancellingAStalledCallFreesItsSlot() throws Exception {
     AtomicInteger calls = new AtomicInteger();
-    start(1, (id, data, emit) -> {
+    start(1, (id, data, options, emit) -> {
       if (calls.getAndIncrement() == 0) {
         for (int number = 0; ; number++) emit.accept(event(number));
       }
@@ -157,7 +157,7 @@ class CallLifecycleTest {
   void queuedCallDoesNotReadItsUploadUntilAdmitted() throws Exception {
     CountDownLatch release = new CountDownLatch(1);
     AtomicInteger calls = new AtomicInteger();
-    start(1, (id, data, emit) -> {
+    start(1, (id, data, options, emit) -> {
       if (calls.getAndIncrement() == 0) {
         try {
           release.await();
@@ -185,7 +185,7 @@ class CallLifecycleTest {
 
   @Test
   void stalledUploadGivesItsSlotBack() throws Exception {
-    start(1, (id, data, emit) -> emit.accept(event(1)), Duration.ofMillis(200));
+    start(1, (id, data, options, emit) -> emit.accept(event(1)), Duration.ofMillis(200));
 
     Client stalled = new Client(-1).upload(false);
     assertThat(stalled.done.await(10, TimeUnit.SECONDS)).isTrue();

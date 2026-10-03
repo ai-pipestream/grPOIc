@@ -34,8 +34,9 @@ import org.apache.poi.ss.util.CellRangeAddress;
 final class SpreadsheetParser {
 
   /**
-   * Serialized row bytes per Sheet event. A batch closes at the first row
-   * that reaches it, so a message is this plus at most one row.
+   * Serialized row bytes per Sheet event when the client asked for sheet
+   * batches. A batch closes at the first row that reaches it, so a message
+   * is this plus at most one row.
    */
   static final int BATCH_BYTES = 1 << 20;
   /** Merged regions kept per sheet; real sheets stay far below. */
@@ -44,8 +45,9 @@ final class SpreadsheetParser {
   private SpreadsheetParser() {}
 
   /** A workbook loaded whole by its usermodel (XLS). */
-  static void parse(Workbook workbook, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
-    Conversion conversion = new Conversion(emit, status);
+  static void parse(Workbook workbook, ParseOptions options, Consumer<ParseEvent> emit,
+                    ParseStatus.Builder status) {
+    Conversion conversion = new Conversion(options, emit, status);
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
       boolean hidden = workbook.isSheetHidden(index) || workbook.isSheetVeryHidden(index);
@@ -55,9 +57,9 @@ final class SpreadsheetParser {
   }
 
   /** An XLSX workbook, each sheet streamed from its part. */
-  static void parse(XlsxSheets workbook, Consumer<ParseEvent> emit, ParseStatus.Builder status)
-      throws IOException {
-    Conversion conversion = new Conversion(emit, status);
+  static void parse(XlsxSheets workbook, ParseOptions options, Consumer<ParseEvent> emit,
+                    ParseStatus.Builder status) throws IOException {
+    Conversion conversion = new Conversion(options, emit, status);
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
       try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
@@ -67,14 +69,16 @@ final class SpreadsheetParser {
     }
   }
 
-  /** Per-workbook conversion state: the formatter and the text budget. */
+  /** Per-workbook conversion state: the formatter, the text budget, the batching choice. */
   private static final class Conversion {
     private final DataFormatter formatter = new DataFormatter();
     private final TextBudget budget = new TextBudget(ZipSecureFile.getMaxTextSize());
+    private final boolean batching;
     private final Consumer<ParseEvent> emit;
     private final ParseStatus.Builder status;
 
-    Conversion(Consumer<ParseEvent> emit, ParseStatus.Builder status) {
+    Conversion(ParseOptions options, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
+      this.batching = options.sheetBatches();
       this.emit = emit;
       this.status = status;
     }
@@ -150,9 +154,12 @@ final class SpreadsheetParser {
     }
 
     /**
-     * One sheet's rows as Sheet events of about {@link #BATCH_BYTES}. A full
-     * batch is held until the next row arrives, so the last event is never
-     * an empty one and is always the one with more_rows unset.
+     * One sheet's rows as Sheet events. Without the client's opt-in a sheet
+     * is a single event however large it grows, which is what a consumer
+     * that predates batching reads. With it, events of about
+     * {@link #BATCH_BYTES}; a full batch is held until the next row arrives,
+     * so the last event is never an empty one and is always the one with
+     * more_rows unset.
      */
     private final class Batches {
       private final int index;
@@ -175,6 +182,7 @@ final class SpreadsheetParser {
           full = null;
         }
         current.addRows(row);
+        if (!batching) return;
         currentBytes += CodedOutputStream.computeMessageSize(
             ai.pipestream.poi.v1.Sheet.ROWS_FIELD_NUMBER, row);
         if (currentBytes >= BATCH_BYTES) {

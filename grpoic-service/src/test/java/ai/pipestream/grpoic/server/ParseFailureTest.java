@@ -78,7 +78,7 @@ class ParseFailureTest {
 
   @Test
   void outOfMemoryFailsTheCallAsResourceExhausted() throws Exception {
-    Outcome outcome = parseWith((id, bytes, emit) -> {
+    Outcome outcome = parseWith((id, bytes, options, emit) -> {
       throw new OutOfMemoryError("Java heap space");
     });
     assertThat(outcome.status().getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
@@ -87,14 +87,14 @@ class ParseFailureTest {
 
   @Test
   void realStackOverflowOnTheParseThreadFailsTheCall() throws Exception {
-    Outcome outcome = parseWith((id, bytes, emit) -> recurse(0));
+    Outcome outcome = parseWith((id, bytes, options, emit) -> recurse(0));
     assertThat(outcome.status().getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
     assertThat(outcome.status().getDescription()).contains("nests too deeply");
   }
 
   @Test
   void otherErrorsFailTheCallAsInternal() throws Exception {
-    Outcome outcome = parseWith((id, bytes, emit) -> {
+    Outcome outcome = parseWith((id, bytes, options, emit) -> {
       throw new NoClassDefFoundError("org/example/Missing");
     });
     assertThat(outcome.status().getCode()).isEqualTo(Status.Code.INTERNAL);

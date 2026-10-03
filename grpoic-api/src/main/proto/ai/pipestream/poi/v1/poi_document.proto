@@ -115,20 +115,25 @@ message CellRange {
   uint32 last_column = 4;
 }
 
-// One worksheet. Rows stream in batches, so no single message grows with
-// the sheet: a sheet whose rows do not fit one batch arrives as several
-// consecutive Sheet events with the same index and name, each holding the
-// next rows in the order the sheet stores them, and every batch but the
-// last sets more_rows. A sheet that fits one batch is one event.
+// One worksheet. By default a worksheet is exactly one Sheet event holding
+// all of its populated rows. A client that sets
+// ParseRequestChunk.sheet_batches instead receives rows in batches, so no
+// single message grows with the sheet: a sheet whose rows do not fit one
+// batch arrives as several consecutive Sheet events with the same index and
+// name, each holding the next rows in the order the sheet stores them, and
+// every batch but the last sets more_rows. A sheet that fits one batch is
+// one event either way.
 message Sheet {
   uint32 index = 1;
   string name = 2;
   repeated SheetRow rows = 3;
   // The sheet's merged cells: the top-left cell of each range is the anchor
   // that carries the value, the rest of the range is covered. Carried on the
-  // sheet's last batch, because a sheet declares them after its rows.
+  // sheet's only or last event, because a sheet declares them after its
+  // rows.
   repeated CellRange merged_regions = 4;
-  // True when the next event is another batch of this sheet.
+  // True when the next event is another batch of this sheet. Only ever set
+  // when the request asked for sheet batches.
   bool more_rows = 5;
   // True when the workbook hides the sheet (hidden or very hidden). Its
   // content is emitted all the same.

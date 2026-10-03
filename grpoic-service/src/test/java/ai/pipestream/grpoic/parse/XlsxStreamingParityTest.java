@@ -40,7 +40,7 @@ class XlsxStreamingParityTest {
 
   private static Output streamed(byte[] bytes) {
     List<ParseEvent> events = new ArrayList<>();
-    DocumentParser.parse("parity", ByteString.copyFrom(bytes), events::add);
+    DocumentParser.parse("parity", ByteString.copyFrom(bytes), ParseOptions.DEFAULTS, events::add);
     return new Output(events.stream().filter(ParseEvent::hasSheet).toList(),
         events.get(events.size() - 1).getStatus());
   }
@@ -49,7 +49,7 @@ class XlsxStreamingParityTest {
     List<ParseEvent> events = new ArrayList<>();
     ParseStatus.Builder status = ParseStatus.newBuilder().setState(ParseStatus.State.STATE_OK);
     try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
-      SpreadsheetParser.parse(workbook, events::add, status);
+      SpreadsheetParser.parse(workbook, ParseOptions.DEFAULTS, events::add, status);
     }
     return new Output(events, status.build());
   }

@@ -37,9 +37,10 @@ service PoiParseService {
   rpc GetServiceInfo(GetServiceInfoRequest) returns (GetServiceInfoResponse);
 }
 
-// One slice of the document upload. Identity fields are read from the first
-// chunk; later chunks only need data, with complete=true on the last. A
-// single-chunk upload (all bytes plus complete=true) is the common case.
+// One slice of the document upload. Identity fields and options are read
+// from the first chunk; later chunks only need data, with complete=true on
+// the last. A single-chunk upload (all bytes plus complete=true) is the
+// common case.
 message ParseRequestChunk {
   // Caller-chosen identifier, echoed in DocumentInfo.
   string document_id = 1;
@@ -48,6 +49,10 @@ message ParseRequestChunk {
   string content_type = 3;
   bytes data = 4;
   bool complete = 5;
+  // Opt in to receiving a large worksheet as several consecutive Sheet
+  // events (see Sheet.more_rows) instead of one message that grows with the
+  // sheet. Off by default: every worksheet is exactly one Sheet event.
+  bool sheet_batches = 6;
 }
 
 // One parse result event. Event order: document_info first, then content

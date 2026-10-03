@@ -45,7 +45,9 @@ rpc GetServiceInfo(GetServiceInfoRequest) returns (GetServiceInfoResponse);
 `filename` / `content_type` (read from the first chunk; the server detects
 the real format from the bytes and never trusts these), plus a `data` slice
 and a `complete` flag on the last chunk. A single-chunk upload (all bytes
-plus `complete=true`) is the common case.
+plus `complete=true`) is the common case. Setting `sheet_batches` on the
+first chunk opts in to receiving large worksheets in batches (see `Sheet`
+below); it is off by default, so existing clients keep one event per sheet.
 
 **Response.** A `ParseEvent` per event, `oneof event`:
 
@@ -54,7 +56,7 @@ plus `complete=true`) is the common case.
 | `DocumentInfo` | first, once | `document_id`, detected `DocumentFormat`, typed `DocumentMetadata` |
 | `Paragraph` | body text, in document order; block content controls (a table of contents, a template's fill-in regions) are opened up and their paragraphs and tables emitted in place | `text`, the document's style name (`Heading1`, `Normal`, ...) |
 | `Table` | one body table, or one native table on a slide (right after its `Slide`, with `slide_index` set) | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
-| `Sheet` | one batch of a worksheet's rows: a sheet is one event, or several consecutive events with the same `index` and `name` when its rows exceed a batch (about 1 MiB), every batch but the last setting `more_rows` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the last batch the sheet's `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
+| `Sheet` | one worksheet, as one event by default; with `sheet_batches` requested, a sheet whose rows exceed a batch (about 1 MiB) arrives as several consecutive events with the same `index` and `name`, every batch but the last setting `more_rows` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the sheet's only or last event its `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
 | `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts` (shapes inside groups included, in shape order), speaker `notes` |
 | `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |

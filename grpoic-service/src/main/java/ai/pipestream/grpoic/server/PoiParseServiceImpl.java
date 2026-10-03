@@ -3,6 +3,7 @@ package ai.pipestream.grpoic.server;
 import ai.pipestream.grpoic.parse.DocumentParser;
 import ai.pipestream.grpoic.parse.DocumentTooLargeException;
 import ai.pipestream.grpoic.parse.InvalidDocumentException;
+import ai.pipestream.grpoic.parse.ParseOptions;
 import ai.pipestream.grpoic.parse.PoiLimits;
 import ai.pipestream.grpoic.parse.ProtectedDocumentException;
 import ai.pipestream.grpoic.parse.UnsupportedFormatException;
@@ -72,7 +73,8 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   /** The parse step, separate so tests can fail it in ways no document reliably does. */
   @FunctionalInterface
   interface Parser {
-    void parse(String documentId, ByteString data, Consumer<ParseEvent> emit);
+    void parse(String documentId, ByteString data, ParseOptions options,
+               Consumer<ParseEvent> emit);
   }
 
   private final long maxDocumentBytes;
@@ -152,6 +154,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     private boolean signalled;
     private volatile boolean cancelled;
     private String documentId = "";
+    private ParseOptions options;
 
     ParseCall(ServerCallStreamObserver<ParseEvent> responses) {
       this.responses = responses;
@@ -241,6 +244,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
           return null;
         }
         if (next instanceof Chunk(ParseRequestChunk chunk)) {
+          if (options == null) options = new ParseOptions(chunk.getSheetBatches());
           if (documentId.isEmpty() && !chunk.getDocumentId().isEmpty()) {
             documentId = chunk.getDocumentId();
           }
@@ -270,7 +274,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
 
     private void parse(ByteString data) {
       try {
-        parser.parse(documentId, data, this::emit);
+        parser.parse(documentId, data, options, this::emit);
         complete();
         counters.recordParsed();
       } catch (CallCancelled abandoned) {

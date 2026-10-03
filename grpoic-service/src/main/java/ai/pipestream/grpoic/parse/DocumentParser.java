@@ -76,12 +76,13 @@ public final class DocumentParser {
    * but are broken), {@link ProtectedDocumentException} (encrypted). Anything
    * else escaping is a server fault, including whatever {@code emit} throws.
    */
-  public static void parse(String documentId, ByteString data, Consumer<ParseEvent> emit) {
+  public static void parse(String documentId, ByteString data, ParseOptions options,
+                           Consumer<ParseEvent> emit) {
     FileMagic magic = FileMagic.valueOf(data.substring(0, Math.min(data.size(), 64)).toByteArray());
     try {
       switch (magic) {
-        case OOXML -> parseOoxml(documentId, data, emit);
-        case OLE2 -> parseOle2(documentId, data, emit);
+        case OOXML -> parseOoxml(documentId, data, options, emit);
+        case OLE2 -> parseOle2(documentId, data, options, emit);
         default -> throw new UnsupportedFormatException(
             "not an office document (magic: " + magic + ")");
       }
@@ -103,7 +104,8 @@ public final class DocumentParser {
     }
   }
 
-  private static void parseOoxml(String documentId, ByteString data, Consumer<ParseEvent> emit)
+  private static void parseOoxml(String documentId, ByteString data, ParseOptions options,
+                                 Consumer<ParseEvent> emit)
       throws IOException, OpenXML4JException, XmlException, SAXException {
     try (OPCPackage container = openPackage(data)) {
       String coreType = coreContentType(container);
@@ -120,7 +122,7 @@ public final class DocumentParser {
         XlsxSheets workbook = XlsxSheets.open(container);
         ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_XLSX,
             () -> MetadataReader.read(properties(container)), emit);
-        SpreadsheetParser.parse(workbook, emit, status);
+        SpreadsheetParser.parse(workbook, options, emit, status);
         EmbeddedObjectParser.parse(workbook::embeddedParts, emit, status);
         finish(status, emit);
       } else if (PRESENTATION_TYPES.contains(normalized)) {
@@ -137,8 +139,8 @@ public final class DocumentParser {
     }
   }
 
-  private static void parseOle2(String documentId, ByteString data, Consumer<ParseEvent> emit)
-      throws IOException {
+  private static void parseOle2(String documentId, ByteString data, ParseOptions options,
+                                Consumer<ParseEvent> emit) throws IOException {
     try (POIFSFileSystem container = new POIFSFileSystem(data.newInput())) {
       DirectoryNode root = container.getRoot();
       if (root.hasEntryCaseInsensitive("EncryptedPackage")) {
@@ -156,7 +158,7 @@ public final class DocumentParser {
         try (HSSFWorkbook workbook = new HSSFWorkbook(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_LEGACY_XLS,
               () -> MetadataReader.read(workbook.getSummaryInformation()), emit);
-          SpreadsheetParser.parse(workbook, emit, status);
+          SpreadsheetParser.parse(workbook, options, emit, status);
           finish(status, emit);
         }
       } else if (root.hasEntryCaseInsensitive("PowerPoint Document")) {

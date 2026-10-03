@@ -20,10 +20,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * Sheets on the wire: a large sheet arrives as ordered batches of bounded
- * size instead of one message that grows with the sheet, merged cells
- * arrive as typed ranges on the sheet's last batch, and hidden sheets are
- * flagged, for XLSX and XLS alike.
+ * Sheets on the wire: a large sheet is one event unless the client opts in
+ * to batches, in which case it arrives as ordered batches of bounded size;
+ * merged cells arrive as typed ranges on the sheet's only or last event, and
+ * hidden sheets are flagged, for XLSX and XLS alike.
  */
 class SheetStructureTest {
 
@@ -56,11 +56,12 @@ class SheetStructureTest {
         + "</worksheet>";
   }
 
-  @Test
-  void largeSheetArrivesInOrderedBoundedBatches() throws Exception {
-    int rowCount = 30_000;
+  private static final int BIG_ROWS = 30_000;
+
+  /** About 2.5 MB of rows on sheet "Big", one merged range, then a small sheet. */
+  private static byte[] bigWorkbook() throws Exception {
     StringBuilder rows = new StringBuilder();
-    for (int row = 1; row <= rowCount; row++) {
+    for (int row = 1; row <= BIG_ROWS; row++) {
       rows.append("<row r=\"").append(row).append("\">");
       for (char column = 'A'; column <= 'E'; column++) {
         rows.append("<c r=\"").append(column).append(row)
@@ -69,11 +70,31 @@ class SheetStructureTest {
       }
       rows.append("</row>");
     }
-    byte[] bytes = withPart(xlsx("Big", "After"), "/xl/worksheets/sheet1.xml",
+    return withPart(xlsx("Big", "After"), "/xl/worksheets/sheet1.xml",
         sheetXml(rows.toString(),
             "<mergeCells count=\"1\"><mergeCell ref=\"A1:E1\"/></mergeCells>"));
+  }
 
-    ParseResult result = harness.parseOk(bytes, "big-sheet");
+  @Test
+  void largeSheetIsOneEventUnlessTheClientOptsIn() throws Exception {
+    ParseResult result = harness.parseOk(bigWorkbook(), "big-sheet-whole");
+    List<Sheet> sheets = result.eventsOf(ParseEvent::hasSheet).stream()
+        .map(ParseEvent::getSheet).toList();
+    assertThat(sheets).extracting(Sheet::getName)
+        .as("a consumer that predates batching sees one event per sheet")
+        .containsExactly("Big", "After");
+    Sheet big = sheets.get(0);
+    assertThat(big.getMoreRows()).isFalse();
+    assertThat(big.getRowsCount()).isEqualTo(BIG_ROWS);
+    assertThat(big.getSerializedSize()).isGreaterThan(2 * BATCH_BYTES);
+    assertThat(big.getMergedRegionsList()).containsExactly(range(0, 0, 0, 4));
+    assertThat(result.status().getSheets()).isEqualTo(2);
+  }
+
+  @Test
+  void largeSheetArrivesInOrderedBoundedBatchesWhenRequested() throws Exception {
+    int rowCount = BIG_ROWS;
+    ParseResult result = harness.parseOk(bigWorkbook(), "big-sheet", true);
     List<Sheet> batches = result.eventsOf(ParseEvent::hasSheet).stream()
         .map(ParseEvent::getSheet).filter(sheet -> sheet.getIndex() == 0).toList();
     assertThat(batches.size()).as("about 2.5 MB of rows cannot be one batch").isGreaterThan(1);
@@ -99,6 +120,17 @@ class SheetStructureTest {
     assertThat(after).hasSize(1);
     assertThat(after.get(0).getMoreRows()).isFalse();
     assertThat(result.status().getSheets()).as("sheets are counted, not batches").isEqualTo(2);
+  }
+
+  @Test
+  void sheetBatchOptionIsReadFromTheFirstChunk() throws Exception {
+    byte[] bytes = bigWorkbook();
+    ParseResult result = harness.parse(bytes, "chunked-batches", 64 * 1024, true);
+    assertThat(result.error()).isNull();
+    assertThat(result.eventsOf(ParseEvent::hasSheet).stream()
+        .filter(event -> event.getSheet().getIndex() == 0).count())
+        .as("a chunked upload opts in through its first chunk")
+        .isGreaterThan(1);
   }
 
   @Test
