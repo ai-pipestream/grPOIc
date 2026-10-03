@@ -163,12 +163,17 @@ final class XlsxSheets {
         || XSSFRelation.CHARTSHEET.getRelation().equals(type);
   }
 
-  /** Streaming row iterator over one sheet part. */
+  /**
+   * Streaming row iterator over one sheet part. The merged-cell references
+   * the sheet declares after its rows are collected on the way to the end.
+   */
   static final class Rows implements Iterator<Row>, AutoCloseable {
     private final XMLStreamReader reader;
     private final InputStream in;
     private final XSSFSheet scratch;
+    private final List<String> mergedReferences = new ArrayList<>();
     private boolean inSheetData;
+    private boolean inMergeCells;
     private long lastRow;
     private Row next;
     private boolean done;
@@ -193,6 +198,14 @@ final class XlsxSheets {
       return row;
     }
 
+    /**
+     * The {@code ref} of every merged-cell range the sheet declares, valid
+     * once the rows have run out.
+     */
+    List<String> mergedReferences() {
+      return mergedReferences;
+    }
+
     private void advance() {
       try {
         while (reader.hasNext()) {
@@ -204,10 +217,21 @@ final class XlsxSheets {
             } else if (inSheetData && element.equals("row")) {
               next = row(CTRow.Factory.parse(reader, ROW_OPTIONS));
               return;
+            } else if (element.equals("mergeCells")) {
+              inMergeCells = true;
+            } else if (inMergeCells && element.equals("mergeCell")) {
+              String reference = reader.getAttributeValue(null, "ref");
+              // One past the cap is kept, so the converter can tell it was hit.
+              if (reference != null
+                  && mergedReferences.size() <= SpreadsheetParser.MAX_MERGED_REGIONS) {
+                mergedReferences.add(reference);
+              }
             }
           } else if (event == XMLStreamConstants.END_ELEMENT
-              && MAIN.equals(reader.getNamespaceURI()) && reader.getLocalName().equals("sheetData")) {
-            inSheetData = false;
+              && MAIN.equals(reader.getNamespaceURI())) {
+            String element = reader.getLocalName();
+            if (element.equals("sheetData")) inSheetData = false;
+            if (element.equals("mergeCells")) inMergeCells = false;
           }
         }
         close();

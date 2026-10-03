@@ -1,12 +1,17 @@
 package ai.pipestream.grpoic.parse;
 
+import ai.pipestream.poi.v1.CellRange;
 import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
 import ai.pipestream.poi.v1.SheetCell;
 import ai.pipestream.poi.v1.SheetRow;
+import com.google.protobuf.CodedOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -17,6 +22,7 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.util.CellAddress;
+import org.apache.poi.ss.util.CellRangeAddress;
 
 /**
  * Spreadsheets through the common SS interface, so XSSF (.xlsx) and HSSF
@@ -27,6 +33,14 @@ import org.apache.poi.ss.util.CellAddress;
  */
 final class SpreadsheetParser {
 
+  /**
+   * Serialized row bytes per Sheet event. A batch closes at the first row
+   * that reaches it, so a message is this plus at most one row.
+   */
+  static final int BATCH_BYTES = 1 << 20;
+  /** Merged regions kept per sheet; real sheets stay far below. */
+  static final int MAX_MERGED_REGIONS = 100_000;
+
   private SpreadsheetParser() {}
 
   /** A workbook loaded whole by its usermodel (XLS). */
@@ -34,7 +48,7 @@ final class SpreadsheetParser {
     Conversion conversion = new Conversion(emit, status);
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
-      conversion.sheet(index, sheet.getSheetName(), sheet.iterator());
+      conversion.sheet(index, sheet.getSheetName(), sheet.iterator(), sheet::getMergedRegions);
     }
   }
 
@@ -45,7 +59,8 @@ final class SpreadsheetParser {
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
       try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
-        conversion.sheet(index++, sheet.name(), rows);
+        conversion.sheet(index++, sheet.name(), rows,
+            () -> conversion.ranges(sheet.name(), rows.mergedReferences()));
       }
     }
   }
@@ -62,9 +77,13 @@ final class SpreadsheetParser {
       this.status = status;
     }
 
-    void sheet(int index, String name, Iterator<? extends Row> rows) {
-      ai.pipestream.poi.v1.Sheet.Builder converted =
-          ai.pipestream.poi.v1.Sheet.newBuilder().setIndex(index).setName(name);
+    /**
+     * Converts one sheet. Merged regions are asked for only after the rows
+     * run out, because a streamed sheet declares them after its rows.
+     */
+    void sheet(int index, String name, Iterator<? extends Row> rows,
+               Supplier<List<CellRangeAddress>> mergedRegions) {
+      Batches batches = new Batches(index, name);
       while (rows.hasNext()) {
         Row row = rows.next();
         SheetRow.Builder convertedRow = SheetRow.newBuilder().setRowIndex(row.getRowNum());
@@ -83,10 +102,94 @@ final class SpreadsheetParser {
           budget.spend(convertedCell);
           convertedRow.addCells(convertedCell);
         }
-        if (convertedRow.getCellsCount() > 0) converted.addRows(convertedRow);
+        if (convertedRow.getCellsCount() > 0) batches.add(convertedRow.build());
       }
-      emit.accept(ParseEvent.newBuilder().setSheet(converted).build());
+      batches.finish(merged(name, mergedRegions.get()));
       status.setSheets(status.getSheets() + 1);
+    }
+
+    /** Parses streamed merged-cell references; an unreadable one is skipped. */
+    List<CellRangeAddress> ranges(String sheetName, List<String> references) {
+      List<CellRangeAddress> ranges = new ArrayList<>(references.size());
+      for (String reference : references) {
+        try {
+          ranges.add(CellRangeAddress.valueOf(reference));
+        } catch (RuntimeException error) {
+          DocumentFaults.skip(status, "sheet '" + sheetName + "' merged region", error);
+        }
+      }
+      return ranges;
+    }
+
+    private List<CellRange> merged(String sheetName, List<CellRangeAddress> regions) {
+      List<CellRange> merged = new ArrayList<>();
+      for (CellRangeAddress region : regions) {
+        if (merged.size() == MAX_MERGED_REGIONS) {
+          DocumentFaults.warn(status, "sheet '" + sheetName + "' has more than "
+              + MAX_MERGED_REGIONS + " merged regions; the rest were skipped");
+          break;
+        }
+        int firstRow = Math.min(region.getFirstRow(), region.getLastRow());
+        int lastRow = Math.max(region.getFirstRow(), region.getLastRow());
+        int firstColumn = Math.min(region.getFirstColumn(), region.getLastColumn());
+        int lastColumn = Math.max(region.getFirstColumn(), region.getLastColumn());
+        if (firstRow < 0 || firstColumn < 0) {
+          // A whole-row or whole-column reference names no cells to anchor.
+          DocumentFaults.warn(status, "sheet '" + sheetName + "' merged region "
+              + region.formatAsString() + " is unbounded and was skipped");
+          continue;
+        }
+        merged.add(CellRange.newBuilder()
+            .setFirstRow(firstRow).setLastRow(lastRow)
+            .setFirstColumn(firstColumn).setLastColumn(lastColumn)
+            .build());
+      }
+      return merged;
+    }
+
+    /**
+     * One sheet's rows as Sheet events of about {@link #BATCH_BYTES}. A full
+     * batch is held until the next row arrives, so the last event is never
+     * an empty one and is always the one with more_rows unset.
+     */
+    private final class Batches {
+      private final int index;
+      private final String name;
+      private ai.pipestream.poi.v1.Sheet.Builder current;
+      private long currentBytes;
+      private ai.pipestream.poi.v1.Sheet.Builder full;
+
+      Batches(int index, String name) {
+        this.index = index;
+        this.name = name;
+        this.current = open();
+      }
+
+      void add(SheetRow row) {
+        if (full != null) {
+          emit.accept(ParseEvent.newBuilder().setSheet(full.setMoreRows(true)).build());
+          full = null;
+        }
+        current.addRows(row);
+        currentBytes += CodedOutputStream.computeMessageSize(
+            ai.pipestream.poi.v1.Sheet.ROWS_FIELD_NUMBER, row);
+        if (currentBytes >= BATCH_BYTES) {
+          full = current;
+          current = open();
+          currentBytes = 0;
+        }
+      }
+
+      void finish(List<CellRange> merged) {
+        ai.pipestream.poi.v1.Sheet.Builder last = full != null ? full : current;
+        emit.accept(ParseEvent.newBuilder()
+            .setSheet(last.addAllMergedRegions(merged).setMoreRows(false))
+            .build());
+      }
+
+      private ai.pipestream.poi.v1.Sheet.Builder open() {
+        return ai.pipestream.poi.v1.Sheet.newBuilder().setIndex(index).setName(name);
+      }
     }
   }
 

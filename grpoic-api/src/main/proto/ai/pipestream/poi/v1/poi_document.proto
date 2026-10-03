@@ -107,11 +107,29 @@ message SheetRow {
   repeated SheetCell cells = 2;
 }
 
-// One worksheet, streamed as a unit.
+// A rectangular block of spreadsheet cells, zero-based and inclusive.
+message CellRange {
+  uint32 first_row = 1;
+  uint32 last_row = 2;
+  uint32 first_column = 3;
+  uint32 last_column = 4;
+}
+
+// One worksheet. Rows stream in batches, so no single message grows with
+// the sheet: a sheet whose rows do not fit one batch arrives as several
+// consecutive Sheet events with the same index and name, each holding the
+// next rows in the order the sheet stores them, and every batch but the
+// last sets more_rows. A sheet that fits one batch is one event.
 message Sheet {
   uint32 index = 1;
   string name = 2;
   repeated SheetRow rows = 3;
+  // The sheet's merged cells: the top-left cell of each range is the anchor
+  // that carries the value, the rest of the range is covered. Carried on the
+  // sheet's last batch, because a sheet declares them after its rows.
+  repeated CellRange merged_regions = 4;
+  // True when the next event is another batch of this sheet.
+  bool more_rows = 5;
 }
 
 // One presentation slide: title, remaining text frames in shape order
