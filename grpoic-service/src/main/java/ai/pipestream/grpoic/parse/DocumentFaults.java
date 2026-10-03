@@ -60,6 +60,15 @@ final class DocumentFaults {
     warn(status, what + " skipped: " + describe(error));
   }
 
+  /**
+   * As {@link #skip}, but the warning names only the exception type, for
+   * failures whose message may quote the document.
+   */
+  static void skipByType(ParseStatus.Builder status, String what, RuntimeException error) {
+    if (!fromDocument(error)) throw error;
+    warn(status, what + " skipped: " + error.getClass().getSimpleName());
+  }
+
   /** Adds a warning and marks the parse partial; the list stays bounded. */
   static void warn(ParseStatus.Builder status, String warning) {
     status.setState(ParseStatus.State.STATE_PARTIAL);
