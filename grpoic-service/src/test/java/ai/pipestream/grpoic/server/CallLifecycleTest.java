@@ -28,8 +28,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A call's life as the transport sees it: admission before the upload is
- * read, backpressure on the way out, and cancellation or a stalled upload
- * giving the parse slot back. The parser seam emits plain events so the
+ * read, backpressure on the way out, and cancellation, a stalled upload or
+ * a client that stopped reading giving the parse slot back. The parser seam emits plain events so the
  * flow, not the document, is under test.
  */
 class CallLifecycleTest {
@@ -46,8 +46,13 @@ class CallLifecycleTest {
 
   private void start(int slots, PoiParseServiceImpl.Parser parser, Duration idle,
                      Duration limit) throws Exception {
+    start(slots, parser, idle, limit, PoiParseServiceImpl.RESPONSE_STALL_LIMIT);
+  }
+
+  private void start(int slots, PoiParseServiceImpl.Parser parser, Duration idle,
+                     Duration limit, Duration stall) throws Exception {
     executor = Executors.newVirtualThreadPerTaskExecutor();
-    service = new PoiParseServiceImpl(1 << 20, slots, executor, parser, idle, limit);
+    service = new PoiParseServiceImpl(1 << 20, slots, executor, parser, idle, limit, stall);
     String name = InProcessServerBuilder.generateName();
     server = InProcessServerBuilder.forName(name).directExecutor()
         .addService(service).build().start();
@@ -236,6 +241,36 @@ class CallLifecycleTest {
     Client next = new Client(-1).upload(true);
     assertThat(next.done.await(10, TimeUnit.SECONDS)).isTrue();
     assertThat(next.failure.get()).isNull();
+  }
+
+  @Test
+  void clientThatStopsReadingGivesItsSlotBack() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    start(1, (id, data, options, emit) -> {
+      if (calls.getAndIncrement() == 0) {
+        for (int number = 0; ; number++) emit.accept(event(number));
+      }
+      emit.accept(event(1));
+    }, PoiParseServiceImpl.UPLOAD_IDLE_TIMEOUT, PoiParseServiceImpl.UPLOAD_TIME_LIMIT,
+        Duration.ofMillis(300));
+
+    // Uploads, reads one event, then never reads again and never cancels.
+    Client silent = new Client(1).upload(true);
+    await().atMost(Duration.ofSeconds(5)).until(() -> silent.received.get() == 1);
+
+    // One slot only: the second call can run only if the first gave it back.
+    Client next = new Client(-1).upload(true);
+    assertThat(next.done.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(next.failure.get()).isNull();
+
+    // Once it reads again, the first client finds its call failed.
+    silent.call.request(1000);
+    assertThat(silent.done.await(10, TimeUnit.SECONDS)).isTrue();
+    Status status = ((StatusRuntimeException) silent.failure.get()).getStatus();
+    assertThat(status.getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
+    assertThat(status.getDescription()).startsWith("client read no response for");
+    await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        assertThat(service.counters().summary()).isEqualTo("docs{parsed=1,rejected=1,failed=0}"));
   }
 
   @Test

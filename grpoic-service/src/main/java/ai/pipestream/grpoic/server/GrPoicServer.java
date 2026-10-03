@@ -6,6 +6,7 @@ import io.grpc.Server;
 import io.grpc.protobuf.services.HealthStatusManager;
 import io.grpc.protobuf.services.ProtoReflectionService;
 import io.grpc.protobuf.services.ProtoReflectionServiceV1;
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -28,10 +29,13 @@ public final class GrPoicServer {
     final int maxConcurrent =
         intFromEnv("GRPOIC_MAX_CONCURRENT_PARSES", Math.max(2, cores), 1, 256);
     final int metricsInterval = intFromEnv("GRPOIC_METRICS_INTERVAL_SECONDS", 60, 0, 86400);
+    final Duration responseStallLimit = Duration.ofSeconds(intFromEnv(
+        "GRPOIC_RESPONSE_STALL_SECONDS",
+        (int) PoiParseServiceImpl.RESPONSE_STALL_LIMIT.toSeconds(), 1, 86400));
 
     var executor = Executors.newVirtualThreadPerTaskExecutor();
     PoiParseServiceImpl service =
-        new PoiParseServiceImpl(maxDocumentBytes, maxConcurrent, executor);
+        new PoiParseServiceImpl(maxDocumentBytes, maxConcurrent, executor, responseStallLimit);
     HealthStatusManager health = new HealthStatusManager();
     Server server =
         Grpc.newServerBuilderForPort(port, InsecureServerCredentials.create())

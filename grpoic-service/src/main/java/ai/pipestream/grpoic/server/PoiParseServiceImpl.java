@@ -46,6 +46,9 @@ import org.apache.poi.Version;
  * <p><b>Backpressure out.</b> Events are written only while the transport
  * is ready for more; otherwise the parse thread waits for the ready signal.
  * A slow client stalls its parse instead of queueing unbounded messages.
+ * A client that reads nothing for the response stall limit (default
+ * {@link #RESPONSE_STALL_LIMIT}) has its call failed and its slot freed, so
+ * a caller that uploads and never reads cannot hold a slot forever.
  *
  * <p><b>Cancellation.</b> A cancelled or expired call stops waiting for a
  * slot, stops its upload, and stops its parse at the next event; it counts
@@ -70,6 +73,12 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
    * forever; this bounds it at about 240 KB/s for a full 70 MiB document.
    */
   static final Duration UPLOAD_TIME_LIMIT = Duration.ofMinutes(5);
+  /**
+   * How long one event may wait for the client to read before the call is
+   * failed. A client that reads slowly but steadily never reaches it; one
+   * that has stopped reading gives its parse slot back.
+   */
+  public static final Duration RESPONSE_STALL_LIMIT = Duration.ofSeconds(60);
 
   // Built ahead of need: when the heap is exhausted, failing the call
   // should allocate as little as possible.
@@ -92,12 +101,18 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   private final Parser parser;
   private final Duration uploadIdleTimeout;
   private final Duration uploadTimeLimit;
+  private final Duration responseStallLimit;
   private final ParseCounters counters = new ParseCounters();
 
   public PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses,
                              ExecutorService executor) {
+    this(maxDocumentBytes, maxConcurrentParses, executor, RESPONSE_STALL_LIMIT);
+  }
+
+  public PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses,
+                             ExecutorService executor, Duration responseStallLimit) {
     this(maxDocumentBytes, maxConcurrentParses, executor, DocumentParser::parse,
-        UPLOAD_IDLE_TIMEOUT);
+        UPLOAD_IDLE_TIMEOUT, UPLOAD_TIME_LIMIT, responseStallLimit);
   }
 
   PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
@@ -113,6 +128,13 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
 
   PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
                       Parser parser, Duration uploadIdleTimeout, Duration uploadTimeLimit) {
+    this(maxDocumentBytes, maxConcurrentParses, executor, parser, uploadIdleTimeout,
+        uploadTimeLimit, RESPONSE_STALL_LIMIT);
+  }
+
+  PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
+                      Parser parser, Duration uploadIdleTimeout, Duration uploadTimeLimit,
+                      Duration responseStallLimit) {
     this.maxDocumentBytes = maxDocumentBytes;
     this.maxConcurrentParses = maxConcurrentParses;
     this.parseSlots = new Semaphore(maxConcurrentParses);
@@ -120,6 +142,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     this.parser = parser;
     this.uploadIdleTimeout = uploadIdleTimeout;
     this.uploadTimeLimit = uploadTimeLimit;
+    this.responseStallLimit = responseStallLimit;
     // POI's limits are JVM-wide; they follow the cap of the server in it.
     PoiLimits.install(maxDocumentBytes);
   }
@@ -154,6 +177,13 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   private static final class CallCancelled extends RuntimeException {
     CallCancelled() {
       super("call cancelled", null, false, false);
+    }
+  }
+
+  /** The client stopped reading; the call fails so its slot can be reused. */
+  private static final class ResponseStalled extends RuntimeException {
+    ResponseStalled() {
+      super("response stalled", null, false, false);
     }
   }
 
@@ -304,6 +334,10 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
         counters.recordParsed();
       } catch (CallCancelled abandoned) {
         // nothing to answer; the client is gone
+      } catch (ResponseStalled stalled) {
+        counters.recordRejected();
+        fail(Status.DEADLINE_EXCEEDED.withDescription("client read no response for "
+            + responseStallLimit.toSeconds() + " s"));
       } catch (UnsupportedFormatException unsupported) {
         counters.recordRejected();
         fail(Status.UNIMPLEMENTED.withDescription(unsupported.getMessage()));
@@ -345,10 +379,15 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
         // isReady() is asked outside the lock the ready handler takes, so
         // the transport and this thread never wait on each other; the flag
         // keeps a signal that lands between the check and the wait.
+        long stalledAt = System.nanoTime() + responseStallLimit.toNanos();
         while (!cancelled && !responses.isReady()) {
+          long left = stalledAt - System.nanoTime();
+          if (left <= 0) throw new ResponseStalled();
           lock.lock();
           try {
-            if (!signalled) writable.await(1, TimeUnit.SECONDS);
+            if (!signalled) {
+              writable.await(Math.min(left, TimeUnit.SECONDS.toNanos(1)), TimeUnit.NANOSECONDS);
+            }
             signalled = false;
           } finally {
             lock.unlock();

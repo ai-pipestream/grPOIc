@@ -56,7 +56,7 @@ below); it is off by default, so existing clients keep one event per sheet.
 | `DocumentInfo` | first, once | `document_id`, detected `DocumentFormat`, typed `DocumentMetadata` |
 | `Paragraph` | body text, in document order; block content controls (a table of contents, a template's fill-in regions) are opened up and their paragraphs and tables emitted in place | `text`, the document's style name (`Heading1`, `Normal`, ...) |
 | `Table` | one body table, or one native table on a slide (right after its `Slide`, with `slide_index` set) | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
-| `Sheet` | one worksheet, as one event by default; with `sheet_batches` requested, a sheet whose rows exceed a batch (about 1 MiB) arrives as several consecutive events with the same `index` and `name`, every batch but the last setting `more_rows` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the sheet's only or last event its `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
+| `Sheet` | one worksheet, as one event by default; with `sheet_batches` requested, a sheet whose rows exceed a batch (about 1 MiB) arrives as several consecutive events with the same `index` and `name`, every batch but the last setting `more_rows`; without it a sheet over 256 MiB of rows fails the call with `RESOURCE_EXHAUSTED` | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped), `hidden` when the workbook hides the sheet, and on the sheet's only or last event its `merged_regions` as typed `CellRange`s (zero-based, inclusive; the top-left cell anchors each) |
 | `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts` (shapes inside groups included, in shape order), speaker `notes` |
 | `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |
@@ -116,7 +116,10 @@ its slot back (`DEADLINE_EXCEEDED`); empty chunks do not count as progress,
 so a trickling client cannot hold a slot.
 
 Events go out only while the transport is ready for more, so a slow reader
-stalls its own parse instead of piling messages up in the server. A cancelled
+stalls its own parse instead of piling messages up in the server. A client
+that reads nothing for 60 seconds (`GRPOIC_RESPONSE_STALL_SECONDS`) while an
+event waits has its call failed with `DEADLINE_EXCEEDED` and gives its slot
+back, so a caller that uploads and never reads cannot hold a slot. A cancelled
 or expired call stops waiting, uploading or parsing at the next step, and
 counts as neither parsed nor failed.
 
@@ -129,7 +132,11 @@ XLSX worksheets are never loaded whole. Each sheet part is read with StAX one
 `<row>` at a time, and every row becomes a real POI `XSSFRow` bound to a
 scratch workbook that lends it the source's styles, shared strings, date
 system and defined names, so cells keep POI's usermodel semantics (types,
-display strings, shared and array formulas) while heap holds one row. DOCX,
+display strings, shared and array formulas) while the reader holds one row.
+Converted rows still collect in the outgoing Sheet event, so without
+`sheet_batches` a sheet whose rows pass 256 MiB serialized fails the parse
+with `RESOURCE_EXHAUSTED` and a hint to set `sheet_batches`; with batches
+the server holds about 1 MiB of converted rows at a time. DOCX,
 PPTX and the OLE2 formats still load as POI object models.
 
 ## Configuration
@@ -140,6 +147,7 @@ PPTX and the OLE2 formats still load as POI object models.
 | `GRPOIC_MAX_DOCUMENT_MIB` | `70` | Per-document byte cap (`RESOURCE_EXHAUSTED` above it) |
 | `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Documents in flight (uploading or parsing) before new calls queue |
 | `GRPOIC_METRICS_INTERVAL_SECONDS` | `60` | Metrics line interval, `0` disables |
+| `GRPOIC_RESPONSE_STALL_SECONDS` | `60` | How long an event may wait for the client to read before the call fails with `DEADLINE_EXCEEDED` and frees its slot |
 
 Metrics are a stdout line on that interval: `grPOIc metrics:
 docs{parsed=N,rejected=N,failed=N}`.

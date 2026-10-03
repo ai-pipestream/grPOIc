@@ -38,6 +38,14 @@ final class SpreadsheetParser {
    * is this plus at most one row.
    */
   static final int BATCH_BYTES = 1 << 20;
+  /**
+   * Serialized row bytes one Sheet event may hold when the client did not
+   * ask for batches. The text budget alone would let a sheet of short cells
+   * grow to tens of millions of cells in one builder; past this the parse
+   * fails with {@link DocumentTooLargeException} and a hint to set
+   * sheet_batches.
+   */
+  static final long UNBATCHED_SHEET_BYTES = 256L << 20;
   /** Merged regions kept per sheet; real sheets stay far below. */
   static final int MAX_MERGED_REGIONS = 100_000;
   /**
@@ -52,7 +60,13 @@ final class SpreadsheetParser {
   /** A workbook loaded whole by its usermodel (XLS). */
   static void parse(Workbook workbook, ParseOptions options, Consumer<ParseEvent> emit,
                     ParseStatus.Builder status) {
-    Conversion conversion = new Conversion(options, emit, status);
+    parse(workbook, options, emit, status, UNBATCHED_SHEET_BYTES);
+  }
+
+  /** As above with the unbatched event cap given, so tests can reach it with a small sheet. */
+  static void parse(Workbook workbook, ParseOptions options, Consumer<ParseEvent> emit,
+                    ParseStatus.Builder status, long unbatchedSheetBytes) {
+    Conversion conversion = new Conversion(options, emit, status, unbatchedSheetBytes);
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
       boolean hidden = workbook.isSheetHidden(index) || workbook.isSheetVeryHidden(index);
@@ -65,7 +79,7 @@ final class SpreadsheetParser {
   static void parse(XlsxSheets workbook, ParseOptions options, Consumer<ParseEvent> emit,
                     ParseStatus.Builder status) throws IOException {
     workbook.defineNames(status);
-    Conversion conversion = new Conversion(options, emit, status);
+    Conversion conversion = new Conversion(options, emit, status, UNBATCHED_SHEET_BYTES);
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
       try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
@@ -86,11 +100,14 @@ final class SpreadsheetParser {
     // cells are charged for what they yield, not for what the file stores.
     private final TextBudget budget = new TextBudget("spreadsheet text");
     private final boolean batching;
+    private final long unbatchedSheetBytes;
     private final Consumer<ParseEvent> emit;
     private final ParseStatus.Builder status;
 
-    Conversion(ParseOptions options, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
+    Conversion(ParseOptions options, Consumer<ParseEvent> emit, ParseStatus.Builder status,
+               long unbatchedSheetBytes) {
       this.batching = options.sheetBatches();
+      this.unbatchedSheetBytes = unbatchedSheetBytes;
       this.emit = emit;
       this.status = status;
     }
@@ -169,8 +186,9 @@ final class SpreadsheetParser {
 
     /**
      * One sheet's rows as Sheet events. Without the client's opt-in a sheet
-     * is a single event however large it grows, which is what a consumer
-     * that predates batching reads. With it, events of about
+     * is a single event, which is what a consumer that predates batching
+     * reads; one past the unbatched cap fails the parse instead of growing
+     * without bound. With it, events of about
      * {@link #BATCH_BYTES}; a full batch is held until the next row arrives,
      * so the last event is never an empty one and is always the one with
      * more_rows unset.
@@ -195,11 +213,15 @@ final class SpreadsheetParser {
           emit.accept(ParseEvent.newBuilder().setSheet(full.setMoreRows(true)).build());
           full = null;
         }
-        current.addRows(row);
-        if (!batching) return;
         currentBytes += CodedOutputStream.computeMessageSize(
             ai.pipestream.poi.v1.Sheet.ROWS_FIELD_NUMBER, row);
-        if (currentBytes >= BATCH_BYTES) {
+        if (!batching && currentBytes > unbatchedSheetBytes) {
+          throw new DocumentTooLargeException("sheet '" + name + "' exceeds "
+              + unbatchedSheetBytes + " bytes as one event; set sheet_batches to receive it"
+              + " in batches");
+        }
+        current.addRows(row);
+        if (batching && currentBytes >= BATCH_BYTES) {
           full = current;
           current = open();
           currentBytes = 0;
