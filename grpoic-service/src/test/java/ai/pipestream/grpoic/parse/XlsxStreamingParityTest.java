@@ -153,7 +153,8 @@ class XlsxStreamingParityTest {
     }
     String sheet = "<worksheet xmlns=\"" + NS + "\"><sheetData>"
         + "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
-        + "<c r=\"B2\"><f t=\"shared\" ref=\"B2:C4\" si=\"0\">A2*Factor+$A$2+'Lookup Table'!$A$1</f>"
+        + "<c r=\"B2\"><f t=\"shared\" ref=\"B2:C4\" si=\"0\">"
+        + "A2*Factor+$A$2+'Lookup Table'!$A$1</f>"
         + "<v>5</v></c><c r=\"C2\"><f t=\"shared\" si=\"0\"/><v>6</v></c>"
         + "<c r=\"D2\"><f t=\"array\" ref=\"D2:D3\">SUM(A2:A4*2)+Offset</f><v>22</v></c>"
         + "<c r=\"E2\" t=\"inlineStr\"><is><r><t>inline </t></r><r><t>rich</t></r></is></c></row>"
@@ -182,7 +183,8 @@ class XlsxStreamingParityTest {
       row.getCell(1).setCellStyle(date);
       base = write(workbook);
     }
-    String strings = "<sst xmlns=\"" + NS + "\" count=\"1\" uniqueCount=\"1\"><si><r><t>漢字</t></r>"
+    String strings = "<sst xmlns=\"" + NS + "\" count=\"1\" uniqueCount=\"1\">"
+        + "<si><r><t>漢字</t></r>"
         + "<rPh sb=\"0\" eb=\"2\"><t>かんじ</t></rPh><phoneticPr fontId=\"1\"/></si></sst>";
     assertParity(withParts(base, "/xl/sharedStrings.xml", strings));
   }

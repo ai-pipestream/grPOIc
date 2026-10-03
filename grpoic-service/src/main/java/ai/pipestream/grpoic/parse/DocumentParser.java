@@ -39,8 +39,9 @@ import org.xml.sax.SAXException;
  * Detects the format from the bytes (the advisory content type is never
  * trusted) and streams typed events: DocumentInfo first, content blocks in
  * document order, ParseStatus last. Entirely in memory, read in place from
- * the upload buffer; nothing is written to disk and no process is executed. Per-format extraction lives in the sibling
- * parser classes; this class only detects, dispatches, and frames the stream.
+ * the upload buffer; nothing is written to disk and no process is executed.
+ * Per-format extraction lives in the sibling parser classes; this class only
+ * detects, dispatches, and frames the stream.
  */
 public final class DocumentParser {
 

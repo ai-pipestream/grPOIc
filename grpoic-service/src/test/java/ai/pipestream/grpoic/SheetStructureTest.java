@@ -68,7 +68,8 @@ class SheetStructureTest {
       rows.append("</row>");
     }
     byte[] bytes = withPart(xlsx("Big", "After"), "/xl/worksheets/sheet1.xml",
-        sheetXml(rows.toString(), "<mergeCells count=\"1\"><mergeCell ref=\"A1:E1\"/></mergeCells>"));
+        sheetXml(rows.toString(),
+            "<mergeCells count=\"1\"><mergeCell ref=\"A1:E1\"/></mergeCells>"));
 
     ParseResult result = harness.parseOk(bytes, "big-sheet");
     List<Sheet> batches = result.eventsOf(ParseEvent::hasSheet).stream()

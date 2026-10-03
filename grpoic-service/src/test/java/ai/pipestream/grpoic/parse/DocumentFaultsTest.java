@@ -70,6 +70,7 @@ class DocumentFaultsTest {
     ParseStatus.Builder status = ParseStatus.newBuilder();
     for (int index = 0; index < 500; index++) DocumentFaults.warn(status, "warning " + index);
     assertThat(status.getWarningsCount()).isEqualTo(DocumentFaults.MAX_WARNINGS + 1);
-    assertThat(status.getWarnings(DocumentFaults.MAX_WARNINGS)).isEqualTo("further warnings omitted");
+    assertThat(status.getWarnings(DocumentFaults.MAX_WARNINGS))
+        .isEqualTo("further warnings omitted");
   }
 }

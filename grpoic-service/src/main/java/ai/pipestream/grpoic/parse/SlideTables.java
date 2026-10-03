@@ -62,7 +62,9 @@ final class SlideTables {
           }
         }
         int rowSpan = Math.min(Math.max(cell.getRowSpan(), 1), rows - row);
-        for (int held = column; held < column + colSpan; held++) occupiedUntil[held] = row + rowSpan;
+        for (int held = column; held < column + colSpan; held++) {
+          occupiedUntil[held] = row + rowSpan;
+        }
         String text = cell.getText();
         convertedRow.addCells(
             TableCell.newBuilder()

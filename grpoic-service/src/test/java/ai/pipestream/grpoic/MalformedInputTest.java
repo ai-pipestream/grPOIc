@@ -136,7 +136,8 @@ class MalformedInputTest {
   void unreadableCellsCostOnlyThemselves() throws Exception {
     ParseResult result = harness.parseOk(xlsxWithSheet(
         "<row r=\"1\"><c r=\"A1\" t=\"e\"><v>#BOGUS!</v></c><c r=\"B1\"><v>7</v></c></row>"
-            + "<row r=\"2\"><c r=\"A2\"><v>not a number</v></c><c r=\"B2\" t=\"b\"><v>1</v></c></row>"),
+            + "<row r=\"2\"><c r=\"A2\"><v>not a number</v></c>"
+            + "<c r=\"B2\" t=\"b\"><v>1</v></c></row>"),
         "bad-cells");
     var rows = result.eventsOf(ParseEvent::hasSheet).get(0).getSheet().getRowsList();
     assertThat(rows).extracting(SheetRow::getCellsCount).containsExactly(1, 1);
