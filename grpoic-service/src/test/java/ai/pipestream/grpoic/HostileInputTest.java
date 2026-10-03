@@ -201,4 +201,27 @@ class HostileInputTest {
       ZipSecureFile.setMaxTextSize(installed);
     }
   }
+
+  @Test
+  void cellsWithoutTextStillSpendTheTextBudget() throws Exception {
+    byte[] bytes = withPart(xlsxWithOneString(), "/xl/sharedStrings.xml",
+        "<sst xmlns=\"" + SPREADSHEETML + "\"><si><t></t></si></sst>");
+    // 200,000 cells that all show the one empty string.
+    StringBuilder rows = new StringBuilder();
+    for (int row = 1; row <= 2_000; row++) {
+      rows.append("<row r=\"").append(row).append("\">")
+          .append("<c t=\"s\"><v>0</v></c>".repeat(100)).append("</row>");
+    }
+    bytes = withPart(bytes, "/xl/worksheets/sheet1.xml", "<worksheet xmlns=\"" + SPREADSHEETML
+        + "\">" + incompressible(200_000) + "<sheetData>" + rows + "</sheetData></worksheet>");
+    long installed = ZipSecureFile.getMaxTextSize();
+    ZipSecureFile.setMaxTextSize(500_000);
+    try {
+      Status status = failure(harness.parse(bytes, "empty-cells", bytes.length));
+      assertThat(status.getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
+      assertThat(status.getDescription()).isEqualTo("spreadsheet text exceeds 500000 characters");
+    } finally {
+      ZipSecureFile.setMaxTextSize(installed);
+    }
+  }
 }

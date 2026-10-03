@@ -40,6 +40,12 @@ final class SpreadsheetParser {
   static final int BATCH_BYTES = 1 << 20;
   /** Merged regions kept per sheet; real sheets stay far below. */
   static final int MAX_MERGED_REGIONS = 100_000;
+  /**
+   * Characters every emitted cell costs on top of its text, about its
+   * smallest size on the wire. Without it a cell with no text (an empty
+   * shared string) would be free, and a sheet could emit millions of them.
+   */
+  static final int CELL_COST = 4;
 
   private SpreadsheetParser() {}
 
@@ -106,7 +112,8 @@ final class SpreadsheetParser {
             continue;
           }
           if (convertedCell == null) continue;
-          budget.spend(convertedCell.getFormatted().length() + convertedCell.getFormula().length()
+          budget.spend(CELL_COST + convertedCell.getFormatted().length()
+              + convertedCell.getFormula().length()
               + (convertedCell.hasText() ? convertedCell.getText().length() : 0));
           convertedRow.addCells(convertedCell);
         }
