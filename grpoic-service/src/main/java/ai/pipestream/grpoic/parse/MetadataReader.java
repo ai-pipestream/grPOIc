@@ -20,8 +20,12 @@ public final class MetadataReader {
 
   /** OOXML core, extended, and custom properties. */
   public static DocumentMetadata read(POIXMLDocument document) {
+    return read(document.getProperties());
+  }
+
+  /** OOXML core, extended, and custom properties read straight from a package. */
+  public static DocumentMetadata read(POIXMLProperties properties) {
     DocumentMetadata.Builder metadata = DocumentMetadata.newBuilder();
-    POIXMLProperties properties = document.getProperties();
     PackageProperties core = properties.getCoreProperties().getUnderlyingProperties();
     core.getTitleProperty().ifPresent(metadata::setTitle);
     core.getCreatorProperty().ifPresent(metadata::setAuthor);

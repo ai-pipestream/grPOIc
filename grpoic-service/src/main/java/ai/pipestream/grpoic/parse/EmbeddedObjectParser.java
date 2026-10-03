@@ -17,17 +17,31 @@ final class EmbeddedObjectParser {
 
   private EmbeddedObjectParser() {}
 
+  /** Lists a package's embedded parts; may fail on a damaged package. */
+  @FunctionalInterface
+  interface Listing {
+    List<PackagePart> parts() throws Exception;
+  }
+
   static void parse(POIXMLDocument document, Consumer<ParseEvent> emit,
                     ParseStatus.Builder status) {
+    parse(document::getAllEmbeddedParts, emit, status);
+  }
+
+  static void parse(Listing listing, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
     List<PackagePart> parts;
     try {
-      parts = document.getAllEmbeddedParts();
+      parts = listing.parts();
     } catch (Exception error) {
       status.setState(ParseStatus.State.STATE_PARTIAL);
       status.addWarnings("embedded part listing failed: " + error.getMessage());
       return;
     }
     for (PackagePart part : parts) {
+      if (part == null) {
+        DocumentFaults.warn(status, "an embedding that points at a missing part was skipped");
+        continue;
+      }
       String name = part.getPartName().getName();
       emit.accept(
           ParseEvent.newBuilder()

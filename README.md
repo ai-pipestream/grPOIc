@@ -21,7 +21,7 @@ flowchart LR
     client[Client] -->|"chunk stream, complete=true on last"| svc[PoiParseService]
     svc --> magic["FileMagic detection<br/>OOXML vs OLE2"]
     magic -->|OOXML wordprocessingml| word["WordParser<br/>XWPFDocument"]
-    magic -->|OOXML spreadsheetml| xlsx["SpreadsheetParser<br/>XSSFWorkbook"]
+    magic -->|OOXML spreadsheetml| xlsx["SpreadsheetParser<br/>XlsxSheets: rows streamed"]
     magic -->|OOXML presentationml| pptx["SlideShowParser<br/>XMLSlideShow"]
     magic -->|OLE2 WordDocument stream| doc["legacy DOC<br/>HWPFDocument + WordExtractor"]
     magic -->|OLE2 Workbook stream| xls["SpreadsheetParser<br/>HSSFWorkbook"]
@@ -107,6 +107,13 @@ OOXML packages are read in place from the upload buffer through the zip's
 central directory: each part inflates as a stream when a parser asks for it,
 and parts nothing reads are never inflated. A package whose central directory
 is damaged falls back to reading the local headers in order.
+
+XLSX worksheets are never loaded whole. Each sheet part is read with StAX one
+`<row>` at a time, and every row becomes a real POI `XSSFRow` bound to a
+scratch workbook that lends it the source's styles, shared strings, date
+system and defined names, so cells keep POI's usermodel semantics (types,
+display strings, shared and array formulas) while heap holds one row. DOCX,
+PPTX and the OLE2 formats still load as POI object models.
 
 ## Configuration
 

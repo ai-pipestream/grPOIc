@@ -18,6 +18,9 @@ import org.apache.poi.OldFileFormatException;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.hwpf.HWPFDocument;
+import org.apache.poi.ooxml.POIXMLException;
+import org.apache.poi.ooxml.POIXMLProperties;
+import org.apache.poi.openxml4j.exceptions.OpenXML4JException;
 import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.openxml4j.opc.PackagePart;
 import org.apache.poi.openxml4j.opc.PackageRelationshipTypes;
@@ -27,9 +30,10 @@ import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFRelation;
 import org.apache.poi.xssf.usermodel.XSSFRelation;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFRelation;
+import org.apache.xmlbeans.XmlException;
+import org.xml.sax.SAXException;
 
 /**
  * Detects the format from the bytes (the advisory content type is never
@@ -89,7 +93,7 @@ public final class DocumentParser {
     } catch (OldFileFormatException old) {
       throw new UnsupportedFormatException(
           "pre-97 office format: " + DocumentFaults.describe(old));
-    } catch (IOException error) {
+    } catch (IOException | OpenXML4JException | XmlException | SAXException error) {
       throw new InvalidDocumentException("unreadable document: " + error.getMessage(), error);
     } catch (RuntimeException error) {
       if (!DocumentFaults.fromDocument(error)) throw error;
@@ -99,7 +103,7 @@ public final class DocumentParser {
   }
 
   private static void parseOoxml(String documentId, ByteString data, Consumer<ParseEvent> emit)
-      throws IOException {
+      throws IOException, OpenXML4JException, XmlException, SAXException {
     try (OPCPackage container = openPackage(data)) {
       String coreType = coreContentType(container);
       String normalized = coreType.toLowerCase(Locale.ROOT);
@@ -112,13 +116,12 @@ public final class DocumentParser {
           finish(status, emit);
         }
       } else if (SPREADSHEET_TYPES.contains(normalized)) {
-        try (XSSFWorkbook workbook = new XSSFWorkbook(container)) {
-          ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_XLSX,
-              () -> MetadataReader.read(workbook), emit);
-          SpreadsheetParser.parse(workbook, emit, status);
-          EmbeddedObjectParser.parse(workbook, emit, status);
-          finish(status, emit);
-        }
+        XlsxSheets workbook = XlsxSheets.open(container);
+        ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_XLSX,
+            () -> MetadataReader.read(properties(container)), emit);
+        SpreadsheetParser.parse(workbook, emit, status);
+        EmbeddedObjectParser.parse(workbook::embeddedParts, emit, status);
+        finish(status, emit);
       } else if (PRESENTATION_TYPES.contains(normalized)) {
         try (XMLSlideShow show = new XMLSlideShow(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_PPTX,
@@ -203,6 +206,15 @@ public final class DocumentParser {
       return InMemoryPackages.open(data);
     } catch (Exception error) {
       throw new InvalidDocumentException("unreadable OOXML container", error);
+    }
+  }
+
+  /** Package properties for metadata; a broken property part is a document fault. */
+  private static POIXMLProperties properties(OPCPackage container) {
+    try {
+      return new POIXMLProperties(container);
+    } catch (IOException | OpenXML4JException | XmlException error) {
+      throw new POIXMLException(error);
     }
   }
 

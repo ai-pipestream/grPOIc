@@ -4,10 +4,12 @@ import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
 import ai.pipestream.poi.v1.SheetCell;
 import ai.pipestream.poi.v1.SheetRow;
+import java.io.IOException;
+import java.util.Iterator;
 import java.util.function.Consumer;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.FormulaError;
@@ -18,21 +20,53 @@ import org.apache.poi.ss.util.CellAddress;
 
 /**
  * Spreadsheets through the common SS interface, so XSSF (.xlsx) and HSSF
- * (.xls) share one path. Formula cells are never evaluated; they carry the
- * formula source and the workbook's cached result.
+ * (.xls) share one cell path. XLSX sheets stream a row at a time
+ * ({@link XlsxSheets}); XLS, whose format caps a sheet at 65,536 rows, goes
+ * through HSSF's usermodel. Formula cells are never evaluated; they carry
+ * the formula source and the workbook's cached result.
  */
 final class SpreadsheetParser {
 
   private SpreadsheetParser() {}
 
+  /** A workbook loaded whole by its usermodel (XLS). */
   static void parse(Workbook workbook, Consumer<ParseEvent> emit, ParseStatus.Builder status) {
-    DataFormatter formatter = new DataFormatter();
-    TextBudget budget = new TextBudget(ZipSecureFile.getMaxTextSize());
+    Conversion conversion = new Conversion(emit, status);
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
+      conversion.sheet(index, sheet.getSheetName(), sheet.iterator());
+    }
+  }
+
+  /** An XLSX workbook, each sheet streamed from its part. */
+  static void parse(XlsxSheets workbook, Consumer<ParseEvent> emit, ParseStatus.Builder status)
+      throws IOException {
+    Conversion conversion = new Conversion(emit, status);
+    int index = 0;
+    for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
+      try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
+        conversion.sheet(index++, sheet.name(), rows);
+      }
+    }
+  }
+
+  /** Per-workbook conversion state: the formatter and the text budget. */
+  private static final class Conversion {
+    private final DataFormatter formatter = new DataFormatter();
+    private final TextBudget budget = new TextBudget(ZipSecureFile.getMaxTextSize());
+    private final Consumer<ParseEvent> emit;
+    private final ParseStatus.Builder status;
+
+    Conversion(Consumer<ParseEvent> emit, ParseStatus.Builder status) {
+      this.emit = emit;
+      this.status = status;
+    }
+
+    void sheet(int index, String name, Iterator<? extends Row> rows) {
       ai.pipestream.poi.v1.Sheet.Builder converted =
-          ai.pipestream.poi.v1.Sheet.newBuilder().setIndex(index).setName(sheet.getSheetName());
-      for (Row row : sheet) {
+          ai.pipestream.poi.v1.Sheet.newBuilder().setIndex(index).setName(name);
+      while (rows.hasNext()) {
+        Row row = rows.next();
         SheetRow.Builder convertedRow = SheetRow.newBuilder().setRowIndex(row.getRowNum());
         for (Cell cell : row) {
           SheetCell.Builder convertedCell;
@@ -41,7 +75,7 @@ final class SpreadsheetParser {
           } catch (RuntimeException error) {
             // One unreadable cell (an unknown error code, a non-numeric
             // number) costs that cell, not the workbook.
-            DocumentFaults.skip(status, "sheet '" + sheet.getSheetName() + "' cell "
+            DocumentFaults.skip(status, "sheet '" + name + "' cell "
                 + new CellAddress(cell).formatAsString(), error);
             continue;
           }
