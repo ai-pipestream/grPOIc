@@ -12,6 +12,10 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.openxml4j.opc.PackagingURIHelper;
 import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -179,5 +183,33 @@ class MalformedInputTest {
     assertThat(status.getState()).isEqualTo(ParseStatus.State.STATE_PARTIAL);
     assertThat(status.getWarningsList()).contains(
         "sheet 'Data' has 3 rows numbered outside 1 to 1048576; they were skipped");
+  }
+
+  @Test
+  void unusableDefinedNamesAreSkippedWithAWarning() throws Exception {
+    byte[] bytes = xlsxWithSheet("<row r=\"1\"><c><v>1</v></c></row>");
+    String workbook;
+    try (OPCPackage container = OPCPackage.open(new ByteArrayInputStream(bytes));
+         InputStream in = container.getPart(
+             PackagingURIHelper.createPartName("/xl/workbook.xml")).getInputStream()) {
+      workbook = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    }
+    assertThat(workbook).contains("</sheets>");
+    // A sheet scope past an int, which a cast would wrap to workbook scope,
+    // and a formula POI cannot parse.
+    String names = "<definedNames>"
+        + "<definedName name=\"Wrapped\" localSheetId=\"4294967295\">Data!$A$1</definedName>"
+        + "<definedName name=\"Broken\">((</definedName></definedNames>";
+    bytes = withPart(bytes, "/xl/workbook.xml", workbook.replace("</sheets>", "</sheets>" + names));
+
+    ParseResult result = harness.parseOk(bytes, "bad-names");
+    assertThat(result.eventsOf(ParseEvent::hasSheet).get(0).getSheet().getRows(0)
+        .getCells(0).getNumber()).isEqualTo(1.0);
+    ParseStatus status = result.status();
+    assertThat(status.getState()).isEqualTo(ParseStatus.State.STATE_PARTIAL);
+    assertThat(status.getWarningsList())
+        .contains("defined name 'Wrapped' skipped: it is scoped to sheet 4294967295, which the"
+            + " workbook does not have")
+        .anyMatch(warning -> warning.startsWith("the formula of defined name 'Broken' skipped"));
   }
 }

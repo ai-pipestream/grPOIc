@@ -1,5 +1,6 @@
 package ai.pipestream.grpoic.parse;
 
+import ai.pipestream.poi.v1.ParseStatus;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -92,9 +93,13 @@ final class XlsxSheets {
   record Worksheet(String name, boolean hidden, PackagePart part, XSSFSheet scratch) {}
 
   private final List<Worksheet> sheets;
+  private final ScratchWorkbook scratch;
+  private final CTDefinedName[] names;
 
-  private XlsxSheets(List<Worksheet> sheets) {
+  private XlsxSheets(List<Worksheet> sheets, ScratchWorkbook scratch, CTDefinedName[] names) {
     this.sheets = sheets;
+    this.scratch = scratch;
+    this.names = names;
   }
 
   static XlsxSheets open(OPCPackage container)
@@ -126,10 +131,19 @@ final class XlsxSheets {
             sheet.getName(), hidden, part, scratch.addSheet(sheets.size())));
       }
     }
-    if (workbook.isSetDefinedNames()) {
-      scratch.mirrorNames(workbook.getDefinedNames().getDefinedNameArray());
-    }
-    return new XlsxSheets(sheets);
+    CTDefinedName[] names = workbook.isSetDefinedNames()
+        ? workbook.getDefinedNames().getDefinedNameArray()
+        : new CTDefinedName[0];
+    return new XlsxSheets(sheets, scratch, names);
+  }
+
+  /**
+   * Recreates the workbook's defined names on the scratch workbook, so
+   * shared formulas that use them render. Runs once, before the first row
+   * is read; a name that cannot be recreated is skipped with a warning.
+   */
+  void defineNames(ParseStatus.Builder status) {
+    scratch.mirrorNames(names, status);
   }
 
   List<Worksheet> sheets() {
@@ -340,22 +354,34 @@ final class XlsxSheets {
     }
 
     /**
-     * The source's defined names, so shared formulas that use them render.
-     * Names are created first and given their formulas second, because a
-     * name may refer to one defined after it. A name POI cannot recreate is
-     * left out; only a formula that uses it is affected.
+     * The source's defined names. Names are created first and given their
+     * formulas second, because a name may refer to one defined after it. A
+     * name POI cannot recreate is left out, and a formula it cannot parse
+     * leaves the name without one; either costs a warning, and only the
+     * formulas that use the name are affected.
      */
-    void mirrorNames(CTDefinedName[] names) {
+    void mirrorNames(CTDefinedName[] names, ParseStatus.Builder status) {
       List<XSSFName> created = new ArrayList<>();
       for (CTDefinedName name : names) {
+        String what = "defined name '" + name.getName() + "'";
+        // localSheetId is an unsigned 32-bit value; a cast would wrap a
+        // large one onto -1 (workbook scope) or onto another sheet.
+        if (name.isSetLocalSheetId() && name.getLocalSheetId() >= getNumberOfSheets()) {
+          DocumentFaults.warn(status, what + " skipped: it is scoped to sheet "
+              + name.getLocalSheetId() + ", which the workbook does not have");
+          created.add(null);
+          continue;
+        }
+        XSSFName copy = createName();
         try {
-          XSSFName copy = createName();
           if (name.isSetLocalSheetId()) copy.setSheetIndex((int) name.getLocalSheetId());
           copy.setNameName(name.getName());
           if (name.getFunction()) copy.setFunction(true);
           created.add(copy);
         } catch (RuntimeException unusable) {
+          removeName(copy);
           created.add(null);
+          DocumentFaults.skip(status, what, unusable);
         }
       }
       for (int index = 0; index < names.length; index++) {
@@ -363,7 +389,8 @@ final class XlsxSheets {
         try {
           created.get(index).setRefersToFormula(names[index].getStringValue());
         } catch (RuntimeException unparseable) {
-          // the name exists without a formula
+          DocumentFaults.skip(status,
+              "the formula of defined name '" + names[index].getName() + "'", unparseable);
         }
       }
     }

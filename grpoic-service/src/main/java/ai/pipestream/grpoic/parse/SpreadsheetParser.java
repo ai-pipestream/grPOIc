@@ -64,6 +64,7 @@ final class SpreadsheetParser {
   /** An XLSX workbook, each sheet streamed from its part. */
   static void parse(XlsxSheets workbook, ParseOptions options, Consumer<ParseEvent> emit,
                     ParseStatus.Builder status) throws IOException {
+    workbook.defineNames(status);
     Conversion conversion = new Conversion(options, emit, status);
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
