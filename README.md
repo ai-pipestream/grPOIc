@@ -99,9 +99,18 @@ grpcurl -plaintext localhost:50052 grpc.health.v1.Health/Check
 ## Concurrency model
 
 POI documents are single-threaded; distinct documents on distinct threads is
-the supported pattern. Each parse runs on its own virtual thread, with a
-semaphore bounding concurrent parses. The bound protects heap (POI holds full
-document models in memory), not just CPU.
+the supported pattern. Each call runs on its own virtual thread, and a
+semaphore bounds the documents in flight. A call takes its slot before it
+reads the first chunk and pulls chunks one at a time, so the bound covers
+uploads as well as parses: a queued client's bytes stay in its transport
+window instead of the heap. Chunks are kept as received and joined without
+copying; the parser reads that buffer in place. An admitted upload that sends
+nothing for 30 seconds gives its slot back (`DEADLINE_EXCEEDED`).
+
+Events go out only while the transport is ready for more, so a slow reader
+stalls its own parse instead of piling messages up in the server. A cancelled
+or expired call stops waiting, uploading or parsing at the next step, and
+counts as neither parsed nor failed.
 
 OOXML packages are read in place from the upload buffer through the zip's
 central directory: each part inflates as a stream when a parser asks for it,
@@ -121,7 +130,7 @@ PPTX and the OLE2 formats still load as POI object models.
 |---|---|---|
 | `GRPOIC_PORT` | `50052` | Listen port |
 | `GRPOIC_MAX_DOCUMENT_MIB` | `70` | Per-document byte cap (`RESOURCE_EXHAUSTED` above it) |
-| `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Parses in flight before queueing |
+| `GRPOIC_MAX_CONCURRENT_PARSES` | max(2, CPU cores) | Documents in flight (uploading or parsing) before new calls queue |
 | `GRPOIC_METRICS_INTERVAL_SECONDS` | `60` | Metrics line interval, `0` disables |
 
 Metrics are a stdout line on that interval: `grPOIc metrics:

@@ -82,7 +82,7 @@ message GetServiceInfoResponse {
   repeated DocumentFormat supported_formats = 4;
   // The byte cap ParseDocument enforces (RESOURCE_EXHAUSTED above it).
   uint64 max_document_bytes = 5;
-  // Documents parsed concurrently before new parses queue.
+  // Documents in flight, uploading or parsing, before new calls queue.
   uint32 max_concurrent_parses = 6;
   // Frontend advertisement for the shared demo shell.
   UiInfo ui = 7;
