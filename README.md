@@ -181,4 +181,7 @@ docker run --rm --read-only -p 50052:50052 grpoic
 
 The image build runs the full test suite, so an image never ships from a
 tree whose tests did not pass. `--read-only` works because the server never
-writes to disk.
+writes to disk. The JVM sizes its heap at 60% of the container's memory limit
+(`-XX:MaxRAMPercentage=60`); the rest is left for Netty's direct buffers,
+metaspace and thread stacks. A parse that still runs out of heap fails its
+own call with `RESOURCE_EXHAUSTED` and the server keeps serving the others.
