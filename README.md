@@ -87,10 +87,11 @@ limit below, or a parse that ran out of heap or stack), `UNIMPLEMENTED` (bytes
 are not an office format this server parses, including the pre-97 binary
 formats), `DEADLINE_EXCEEDED` (an upload that stalled or ran too long, see
 below), `INTERNAL` (a fault in grPOIc itself). Every failure closes the call,
-including a parse that dies with an `Error`. Damage confined to one element (a cell, a
-paragraph, a table, a slide shape, the property parts) skips that element
-with a warning and a `STATE_PARTIAL` status instead of failing the document;
-`warnings` keeps the first 20 and then one closing note.
+including a parse that dies with an `Error`. Damage confined to one element
+(a cell, a sheet row numbered outside the sheet, a paragraph, a table, a
+slide shape, the property parts) skips that element with a warning and a
+`STATE_PARTIAL` status instead of failing the document; `warnings` keeps the
+first 20 and then one closing note.
 
 Standard gRPC health checking (`grpc.health.v1.Health`) and reflection (v1
 and v1alpha) are registered:

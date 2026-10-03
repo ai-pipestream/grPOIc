@@ -162,4 +162,22 @@ class MalformedInputTest {
     assertThat(result.status().getWarningsList())
         .anyMatch(warning -> warning.startsWith("document metadata skipped"));
   }
+
+  @Test
+  void rowsNumberedOutsideTheSheetCostOnlyThemselves() throws Exception {
+    // Zero, past the sheet's last row, and past an int: none can be placed.
+    ParseResult result = harness.parseOk(xlsxWithSheet(
+        "<row r=\"0\"><c><v>1</v></c></row>"
+            + "<row r=\"2\"><c><v>2</v></c></row>"
+            + "<row r=\"1048577\"><c><v>3</v></c></row>"
+            + "<row r=\"4294967295\"><c><v>4</v></c></row>"),
+        "bad-rows");
+    var rows = result.eventsOf(ParseEvent::hasSheet).get(0).getSheet().getRowsList();
+    assertThat(rows).extracting(SheetRow::getRowIndex).containsExactly(1);
+    assertThat(rows.get(0).getCells(0).getNumber()).isEqualTo(2.0);
+    ParseStatus status = result.status();
+    assertThat(status.getState()).isEqualTo(ParseStatus.State.STATE_PARTIAL);
+    assertThat(status.getWarningsList()).contains(
+        "sheet 'Data' has 3 rows numbered outside 1 to 1048576; they were skipped");
+  }
 }

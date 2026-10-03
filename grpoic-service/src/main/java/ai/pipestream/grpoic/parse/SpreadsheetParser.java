@@ -70,6 +70,10 @@ final class SpreadsheetParser {
       try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
         conversion.sheet(index++, sheet.name(), sheet.hidden(), rows,
             () -> conversion.ranges(sheet.name(), rows.mergedReferences()));
+        if (rows.skippedRows() > 0) {
+          DocumentFaults.warn(status, "sheet '" + sheet.name() + "' has " + rows.skippedRows()
+              + " rows numbered outside 1 to 1048576; they were skipped");
+        }
       }
     }
   }

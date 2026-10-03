@@ -16,6 +16,7 @@ import org.apache.poi.openxml4j.opc.OPCPackage;
 import org.apache.poi.openxml4j.opc.PackagePart;
 import org.apache.poi.openxml4j.opc.PackageRelationship;
 import org.apache.poi.openxml4j.opc.PackageRelationshipTypes;
+import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.RichTextString;
 import org.apache.poi.ss.usermodel.Row;
@@ -78,6 +79,8 @@ final class XlsxSheets {
   private static final XmlOptions ROW_OPTIONS =
       new XmlOptions(POIXMLTypeLoader.DEFAULT_XML_OPTIONS);
   private static final String MAIN = XSSFRelation.NS_SPREADSHEETML;
+  /** The highest one-based row number a worksheet can hold. */
+  private static final long MAX_ROW = SpreadsheetVersion.EXCEL2007.getMaxRows();
 
   static {
     // Parse a lone <row> element as the CTRow itself, not as a document
@@ -171,6 +174,9 @@ final class XlsxSheets {
   /**
    * Streaming row iterator over one sheet part. The merged-cell references
    * the sheet declares after its rows are collected on the way to the end.
+   * A row numbered outside 1 to 1,048,576 is skipped and counted: POI turns
+   * such a number into a negative index or an overflow that would fail the
+   * whole workbook.
    */
   static final class Rows implements Iterator<Row>, AutoCloseable {
     private final XMLStreamReader reader;
@@ -180,6 +186,7 @@ final class XlsxSheets {
     private boolean inSheetData;
     private boolean inMergeCells;
     private long lastRow;
+    private long skippedRows;
     private Row next;
     private boolean done;
 
@@ -211,6 +218,11 @@ final class XlsxSheets {
       return mergedReferences;
     }
 
+    /** Rows skipped for a number outside the sheet, final once the rows have run out. */
+    long skippedRows() {
+      return skippedRows;
+    }
+
     private void advance() {
       try {
         while (reader.hasNext()) {
@@ -220,7 +232,15 @@ final class XlsxSheets {
             if (element.equals("sheetData")) {
               inSheetData = true;
             } else if (inSheetData && element.equals("row")) {
-              next = row(CTRow.Factory.parse(reader, ROW_OPTIONS));
+              CTRow stored = CTRow.Factory.parse(reader, ROW_OPTIONS);
+              // A writer may omit row numbers; like XSSFSheet, take the next one.
+              if (!stored.isSetR()) stored.setR(lastRow + 1);
+              lastRow = stored.getR();
+              if (lastRow < 1 || lastRow > MAX_ROW) {
+                skippedRows++;
+                continue;
+              }
+              next = row(stored);
               return;
             } else if (element.equals("mergeCells")) {
               inMergeCells = true;
@@ -247,9 +267,6 @@ final class XlsxSheets {
     }
 
     private Row row(CTRow stored) {
-      // A writer may omit row numbers; like XSSFSheet, take the next one.
-      if (!stored.isSetR()) stored.setR(lastRow + 1);
-      lastRow = stored.getR();
       XSSFRow row = new StreamedRow(stored, scratch);
       for (Cell cell : row) {
         CTCell source = ((XSSFCell) cell).getCTCell();
