@@ -12,6 +12,7 @@ import ai.pipestream.poi.v1.SheetRow;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.SheetVisibility;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.AfterAll;
@@ -20,8 +21,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Sheets on the wire: a large sheet arrives as ordered batches of bounded
- * size instead of one message that grows with the sheet, and merged cells
- * arrive as typed ranges on the sheet's last batch, for XLSX and XLS alike.
+ * size instead of one message that grows with the sheet, merged cells
+ * arrive as typed ranges on the sheet's last batch, and hidden sheets are
+ * flagged, for XLSX and XLS alike.
  */
 class SheetStructureTest {
 
@@ -134,6 +136,37 @@ class SheetStructureTest {
     assertThat(sheet.getMergedRegionsList()).containsExactly(
         range(0, 0, 0, 3),
         range(2, 6, 1, 2));
+  }
+
+  @Test
+  void hiddenSheetsSayTheyAreHidden() throws Exception {
+    byte[] xlsx;
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      workbook.createSheet("Shown");
+      workbook.createSheet("Hidden");
+      workbook.createSheet("VeryHidden");
+      workbook.setSheetVisibility(1, SheetVisibility.HIDDEN);
+      workbook.setSheetVisibility(2, SheetVisibility.VERY_HIDDEN);
+      workbook.write(out);
+      xlsx = out.toByteArray();
+    }
+    assertThat(harness.parseOk(xlsx, "hidden-xlsx").eventsOf(ParseEvent::hasSheet))
+        .extracting(event -> event.getSheet().getName() + ":" + event.getSheet().getHidden())
+        .containsExactly("Shown:false", "Hidden:true", "VeryHidden:true");
+
+    byte[] xls;
+    try (HSSFWorkbook workbook = new HSSFWorkbook();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      workbook.createSheet("Shown");
+      workbook.createSheet("Hidden");
+      workbook.setSheetHidden(1, true);
+      workbook.write(out);
+      xls = out.toByteArray();
+    }
+    assertThat(harness.parseOk(xls, "hidden-xls").eventsOf(ParseEvent::hasSheet))
+        .extracting(event -> event.getSheet().getName() + ":" + event.getSheet().getHidden())
+        .containsExactly("Shown:false", "Hidden:true");
   }
 
   private static CellRange range(int firstRow, int lastRow, int firstColumn, int lastColumn) {

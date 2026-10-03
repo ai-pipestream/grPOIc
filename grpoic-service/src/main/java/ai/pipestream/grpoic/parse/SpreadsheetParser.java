@@ -48,7 +48,9 @@ final class SpreadsheetParser {
     Conversion conversion = new Conversion(emit, status);
     for (int index = 0; index < workbook.getNumberOfSheets(); index++) {
       Sheet sheet = workbook.getSheetAt(index);
-      conversion.sheet(index, sheet.getSheetName(), sheet.iterator(), sheet::getMergedRegions);
+      boolean hidden = workbook.isSheetHidden(index) || workbook.isSheetVeryHidden(index);
+      conversion.sheet(index, sheet.getSheetName(), hidden, sheet.iterator(),
+          sheet::getMergedRegions);
     }
   }
 
@@ -59,7 +61,7 @@ final class SpreadsheetParser {
     int index = 0;
     for (XlsxSheets.Worksheet sheet : workbook.sheets()) {
       try (XlsxSheets.Rows rows = XlsxSheets.rows(sheet)) {
-        conversion.sheet(index++, sheet.name(), rows,
+        conversion.sheet(index++, sheet.name(), sheet.hidden(), rows,
             () -> conversion.ranges(sheet.name(), rows.mergedReferences()));
       }
     }
@@ -81,9 +83,9 @@ final class SpreadsheetParser {
      * Converts one sheet. Merged regions are asked for only after the rows
      * run out, because a streamed sheet declares them after its rows.
      */
-    void sheet(int index, String name, Iterator<? extends Row> rows,
+    void sheet(int index, String name, boolean hidden, Iterator<? extends Row> rows,
                Supplier<List<CellRangeAddress>> mergedRegions) {
-      Batches batches = new Batches(index, name);
+      Batches batches = new Batches(index, name, hidden);
       while (rows.hasNext()) {
         Row row = rows.next();
         SheetRow.Builder convertedRow = SheetRow.newBuilder().setRowIndex(row.getRowNum());
@@ -155,13 +157,15 @@ final class SpreadsheetParser {
     private final class Batches {
       private final int index;
       private final String name;
+      private final boolean hidden;
       private ai.pipestream.poi.v1.Sheet.Builder current;
       private long currentBytes;
       private ai.pipestream.poi.v1.Sheet.Builder full;
 
-      Batches(int index, String name) {
+      Batches(int index, String name, boolean hidden) {
         this.index = index;
         this.name = name;
+        this.hidden = hidden;
         this.current = open();
       }
 
@@ -188,7 +192,8 @@ final class SpreadsheetParser {
       }
 
       private ai.pipestream.poi.v1.Sheet.Builder open() {
-        return ai.pipestream.poi.v1.Sheet.newBuilder().setIndex(index).setName(name);
+        return ai.pipestream.poi.v1.Sheet.newBuilder()
+            .setIndex(index).setName(name).setHidden(hidden);
       }
     }
   }

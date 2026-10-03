@@ -130,6 +130,9 @@ message Sheet {
   repeated CellRange merged_regions = 4;
   // True when the next event is another batch of this sheet.
   bool more_rows = 5;
+  // True when the workbook hides the sheet (hidden or very hidden). Its
+  // content is emitted all the same.
+  bool hidden = 6;
 }
 
 // One presentation slide: title, remaining text frames in shape order

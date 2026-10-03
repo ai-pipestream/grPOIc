@@ -38,6 +38,7 @@ import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTRow;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTSheet;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTWorkbook;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellFormulaType;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.STSheetState;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.WorkbookDocument;
 import org.xml.sax.SAXException;
 
@@ -82,8 +83,8 @@ final class XlsxSheets {
     ROW_OPTIONS.setLoadReplaceDocumentElement(null);
   }
 
-  /** One worksheet: its name, its part, and the scratch sheet its rows bind to. */
-  record Worksheet(String name, PackagePart part, XSSFSheet scratch) {}
+  /** One worksheet: its name, visibility, part, and the scratch sheet its rows bind to. */
+  record Worksheet(String name, boolean hidden, PackagePart part, XSSFSheet scratch) {}
 
   private final List<Worksheet> sheets;
 
@@ -115,7 +116,9 @@ final class XlsxSheets {
         if (relationship == null || !isLoadedSheet(relationship)) continue;
         PackagePart part = workbookPart.getRelatedPart(relationship);
         if (part == null) continue;
-        sheets.add(new Worksheet(sheet.getName(), part, scratch.addSheet(sheets.size())));
+        boolean hidden = sheet.isSetState() && sheet.getState() != STSheetState.VISIBLE;
+        sheets.add(new Worksheet(
+            sheet.getName(), hidden, part, scratch.addSheet(sheets.size())));
       }
     }
     if (workbook.isSetDefinedNames()) {
