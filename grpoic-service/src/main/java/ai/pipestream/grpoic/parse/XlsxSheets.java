@@ -152,18 +152,9 @@ final class XlsxSheets {
     return sheets;
   }
 
-  /** The OLE and package embeddings of every sheet, as XSSFWorkbook lists them. */
+  /** The OLE and package embeddings of every sheet; see {@link EmbeddedObjectParser#embeddings}. */
   List<PackagePart> embeddedParts() throws InvalidFormatException {
-    List<PackagePart> parts = new ArrayList<>();
-    for (Worksheet sheet : sheets) {
-      for (String type : List.of(XSSFRelation.OLEEMBEDDINGS.getRelation(),
-                                 XSSFRelation.PACKEMBEDDINGS.getRelation())) {
-        for (PackageRelationship relationship : sheet.part().getRelationshipsByType(type)) {
-          parts.add(sheet.part().getRelatedPart(relationship));
-        }
-      }
-    }
-    return parts;
+    return EmbeddedObjectParser.embeddings(sheets.stream().map(Worksheet::part).toList());
   }
 
   /**

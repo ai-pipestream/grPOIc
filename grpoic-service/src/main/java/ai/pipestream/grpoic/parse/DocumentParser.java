@@ -8,6 +8,7 @@ import ai.pipestream.poi.v1.ParseStatus;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -115,7 +116,9 @@ public final class DocumentParser {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_DOCX,
               () -> MetadataReader.read(document), emit);
           WordParser.parse(document, emit, status);
-          EmbeddedObjectParser.parse(document, emit, status);
+          EmbeddedObjectParser.parse(
+              () -> EmbeddedObjectParser.embeddings(List.of(document.getPackagePart())),
+              emit, status);
           finish(status, emit);
         }
       } else if (SPREADSHEET_TYPES.contains(normalized)) {
