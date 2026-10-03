@@ -52,7 +52,7 @@ plus `complete=true`) is the common case.
 | Event | When | Carries |
 |---|---|---|
 | `DocumentInfo` | first, once | `document_id`, detected `DocumentFormat`, typed `DocumentMetadata` |
-| `Paragraph` | body text, in document order | `text`, the document's style name (`Heading1`, `Normal`, ...) |
+| `Paragraph` | body text, in document order; block content controls (a table of contents, a template's fill-in regions) are opened up and their paragraphs and tables emitted in place | `text`, the document's style name (`Heading1`, `Normal`, ...) |
 | `Table` | one body table | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
 | `Sheet` | one worksheet, streamed as a unit | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped) |
 | `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts`, speaker `notes` |
