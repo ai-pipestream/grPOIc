@@ -11,7 +11,10 @@ import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import org.apache.poi.EncryptedDocumentException;
+import org.apache.poi.OldFileFormatException;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.hwpf.HWPFDocument;
@@ -61,6 +64,13 @@ public final class DocumentParser {
 
   private DocumentParser() {}
 
+  /**
+   * Parses one document. Failures leave as one of three typed exceptions the
+   * service maps to a status: {@link UnsupportedFormatException} (not a format
+   * parsed here), {@link InvalidDocumentException} (the bytes claim a format
+   * but are broken), {@link ProtectedDocumentException} (encrypted). Anything
+   * else escaping is a server fault, including whatever {@code emit} throws.
+   */
   public static void parse(String documentId, byte[] bytes, Consumer<ParseEvent> emit) {
     FileMagic magic = FileMagic.valueOf(bytes);
     try {
@@ -70,8 +80,21 @@ public final class DocumentParser {
         default -> throw new UnsupportedFormatException(
             "not an office document (magic: " + magic + ")");
       }
+    } catch (UnsupportedFormatException | InvalidDocumentException
+             | ProtectedDocumentException classified) {
+      throw classified;
+    } catch (EncryptedDocumentException encrypted) {
+      throw new ProtectedDocumentException(
+          "encrypted document: " + DocumentFaults.describe(encrypted), encrypted);
+    } catch (OldFileFormatException old) {
+      throw new UnsupportedFormatException(
+          "pre-97 office format: " + DocumentFaults.describe(old));
     } catch (IOException error) {
       throw new InvalidDocumentException("unreadable document: " + error.getMessage(), error);
+    } catch (RuntimeException error) {
+      if (!DocumentFaults.fromDocument(error)) throw error;
+      throw new InvalidDocumentException(
+          "malformed document: " + DocumentFaults.describe(error), error);
     }
   }
 
@@ -83,7 +106,7 @@ public final class DocumentParser {
       if (WORD_TYPES.contains(normalized)) {
         try (XWPFDocument document = new XWPFDocument(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_DOCX,
-              MetadataReader.read(document), emit);
+              () -> MetadataReader.read(document), emit);
           WordParser.parse(document, emit, status);
           EmbeddedObjectParser.parse(document, emit, status);
           finish(status, emit);
@@ -91,7 +114,7 @@ public final class DocumentParser {
       } else if (SPREADSHEET_TYPES.contains(normalized)) {
         try (XSSFWorkbook workbook = new XSSFWorkbook(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_XLSX,
-              MetadataReader.read(workbook), emit);
+              () -> MetadataReader.read(workbook), emit);
           SpreadsheetParser.parse(workbook, emit, status);
           EmbeddedObjectParser.parse(workbook, emit, status);
           finish(status, emit);
@@ -99,7 +122,7 @@ public final class DocumentParser {
       } else if (PRESENTATION_TYPES.contains(normalized)) {
         try (XMLSlideShow show = new XMLSlideShow(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_PPTX,
-              MetadataReader.read(show), emit);
+              () -> MetadataReader.read(show), emit);
           SlideShowParser.parse(show, emit, status);
           EmbeddedObjectParser.parse(show, emit, status);
           finish(status, emit);
@@ -114,24 +137,28 @@ public final class DocumentParser {
       throws IOException {
     try (POIFSFileSystem container = new POIFSFileSystem(new ByteArrayInputStream(bytes))) {
       DirectoryNode root = container.getRoot();
-      if (root.hasEntryCaseInsensitive("WordDocument")) {
+      if (root.hasEntryCaseInsensitive("EncryptedPackage")) {
+        // An encrypted DOCX/XLSX/PPTX travels as an OLE2 container holding
+        // the encrypted zip; without the password there is nothing to read.
+        throw new ProtectedDocumentException("encrypted OOXML package", null);
+      } else if (root.hasEntryCaseInsensitive("WordDocument")) {
         try (HWPFDocument document = new HWPFDocument(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_LEGACY_DOC,
-              MetadataReader.read(document.getSummaryInformation()), emit);
+              () -> MetadataReader.read(document.getSummaryInformation()), emit);
           LegacyWordParser.parse(document, emit, status);
           finish(status, emit);
         }
       } else if (root.hasEntryCaseInsensitive("Workbook")) {
         try (HSSFWorkbook workbook = new HSSFWorkbook(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_LEGACY_XLS,
-              MetadataReader.read(workbook.getSummaryInformation()), emit);
+              () -> MetadataReader.read(workbook.getSummaryInformation()), emit);
           SpreadsheetParser.parse(workbook, emit, status);
           finish(status, emit);
         }
       } else if (root.hasEntryCaseInsensitive("PowerPoint Document")) {
         try (HSLFSlideShow show = new HSLFSlideShow(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_LEGACY_PPT,
-              MetadataReader.read(show.getSlideShowImpl().getSummaryInformation()), emit);
+              () -> MetadataReader.read(show.getSlideShowImpl().getSummaryInformation()), emit);
           SlideShowParser.parse(show, emit, status);
           finish(status, emit);
         }
@@ -141,18 +168,30 @@ public final class DocumentParser {
     }
   }
 
+  /**
+   * Emits DocumentInfo and opens the status. Broken property parts cost the
+   * metadata, not the document.
+   */
   private static ParseStatus.Builder start(
-      String documentId, DocumentFormat format, DocumentMetadata metadata,
+      String documentId, DocumentFormat format, Supplier<DocumentMetadata> metadata,
       Consumer<ParseEvent> emit) {
+    ParseStatus.Builder status = ParseStatus.newBuilder().setState(ParseStatus.State.STATE_OK);
+    DocumentMetadata read;
+    try {
+      read = metadata.get();
+    } catch (RuntimeException error) {
+      DocumentFaults.skip(status, "document metadata", error);
+      read = DocumentMetadata.getDefaultInstance();
+    }
     emit.accept(
         ParseEvent.newBuilder()
             .setDocumentInfo(
                 DocumentInfo.newBuilder()
                     .setDocumentId(documentId)
                     .setFormat(format)
-                    .setMetadata(metadata))
+                    .setMetadata(read))
             .build());
-    return ParseStatus.newBuilder().setState(ParseStatus.State.STATE_OK);
+    return status;
   }
 
   private static void finish(ParseStatus.Builder status, Consumer<ParseEvent> emit) {

@@ -32,34 +32,59 @@ final class SlideShowParser {
     int index = 0;
     for (Slide<?, ?> slide : show.getSlides()) {
       int slideIndex = index++;
+      String where = "slide " + (slideIndex + 1);
+      // A shape or table the document breaks costs that shape with a
+      // warning, a slide that cannot be walked at all costs the slide; the
+      // emits stay outside the guards.
       ai.pipestream.poi.v1.Slide.Builder converted =
           ai.pipestream.poi.v1.Slide.newBuilder().setIndex(slideIndex);
-      String title = slide.getTitle();
-      if (title != null) converted.setTitle(title);
       List<TableShape<?, ?>> tables = new ArrayList<>();
-      for (Shape<?, ?> shape : shapes(slide)) {
-        if (shape instanceof TableShape<?, ?> table) {
-          tables.add(table);
-        } else if (shape instanceof TextShape<?, ?> textShape && !isTitle(textShape)) {
-          String text = textShape.getText();
-          if (text != null && !text.isBlank()) converted.addTexts(text);
+      try {
+        String title = slide.getTitle();
+        if (title != null) converted.setTitle(title);
+        for (Shape<?, ?> shape : shapes(slide)) {
+          if (shape instanceof TableShape<?, ?> table) {
+            tables.add(table);
+          } else if (shape instanceof TextShape<?, ?> textShape) {
+            addText(textShape, true, converted::addTexts, status, where);
+          }
         }
-      }
-      Notes<?, ?> notes = slide.getNotes();
-      if (notes != null) {
-        for (Shape<?, ?> shape : shapes(notes)) {
-          if (!(shape instanceof TextShape<?, ?> textShape)) continue;
-          String text = textShape.getText();
-          if (text != null && !text.isBlank()) converted.addNotes(text);
+        Notes<?, ?> notes = slide.getNotes();
+        if (notes != null) {
+          for (Shape<?, ?> shape : shapes(notes)) {
+            if (shape instanceof TextShape<?, ?> textShape) {
+              addText(textShape, false, converted::addNotes, status, where + " notes");
+            }
+          }
         }
+      } catch (RuntimeException error) {
+        DocumentFaults.skip(status, where, error);
+        continue;
       }
       emit.accept(ParseEvent.newBuilder().setSlide(converted).build());
       status.setSlides(status.getSlides() + 1);
       for (TableShape<?, ?> table : tables) {
-        Table convertedTable = SlideTables.convert(table).toBuilder().setSlideIndex(slideIndex).build();
+        Table convertedTable;
+        try {
+          convertedTable = SlideTables.convert(table).toBuilder().setSlideIndex(slideIndex).build();
+        } catch (RuntimeException error) {
+          DocumentFaults.skip(status, "a table on " + where, error);
+          continue;
+        }
         emit.accept(ParseEvent.newBuilder().setTable(convertedTable).build());
         status.setTables(status.getTables() + 1);
       }
+    }
+  }
+
+  private static void addText(TextShape<?, ?> shape, boolean skipTitle, Consumer<String> add,
+                              ParseStatus.Builder status, String where) {
+    try {
+      if (skipTitle && isTitle(shape)) return;
+      String text = shape.getText();
+      if (text != null && !text.isBlank()) add.accept(text);
+    } catch (RuntimeException error) {
+      DocumentFaults.skip(status, "a text shape on " + where, error);
     }
   }
 

@@ -78,11 +78,15 @@ below, for orchestrators and tool facades that need capability discovery. Its
 its tab bar.
 
 **Errors** are gRPC status codes: `INVALID_ARGUMENT` (no bytes, stream ended
-without a chunk marked `complete`, unreadable claimed format),
+without a chunk marked `complete`, or bytes that claim a supported format but
+are corrupt), `FAILED_PRECONDITION` (the document is encrypted),
 `RESOURCE_EXHAUSTED` (over the byte cap, or the parse ran out of heap or
-stack), `UNIMPLEMENTED` (bytes are not an office format this server parses),
-`INTERNAL` (parser fault). Every failure closes the call, including a parse
-that dies with an `Error`. Standard gRPC
+stack), `UNIMPLEMENTED` (bytes are not an office format this server parses,
+including the pre-97 binary formats), `INTERNAL` (a fault in grPOIc itself).
+Every failure closes the call, including a parse that dies with an `Error`.
+Damage confined to one element (a cell, a paragraph, a table, a slide shape,
+the property parts) skips that element with a warning and a `STATE_PARTIAL`
+status instead of failing the document. Standard gRPC
 health checking (`grpc.health.v1.Health`) and reflection (v1 and v1alpha) are
 registered:
 

@@ -13,6 +13,7 @@ import org.apache.poi.ss.usermodel.FormulaError;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.util.CellAddress;
 
 /**
  * Spreadsheets through the common SS interface, so XSSF (.xlsx) and HSSF
@@ -32,7 +33,16 @@ final class SpreadsheetParser {
       for (Row row : sheet) {
         SheetRow.Builder convertedRow = SheetRow.newBuilder().setRowIndex(row.getRowNum());
         for (Cell cell : row) {
-          SheetCell.Builder convertedCell = convert(cell, formatter);
+          SheetCell.Builder convertedCell;
+          try {
+            convertedCell = convert(cell, formatter);
+          } catch (RuntimeException error) {
+            // One unreadable cell (an unknown error code, a non-numeric
+            // number) costs that cell, not the workbook.
+            DocumentFaults.skip(status, "sheet '" + sheet.getSheetName() + "' cell "
+                + new CellAddress(cell).formatAsString(), error);
+            continue;
+          }
           if (convertedCell != null) convertedRow.addCells(convertedCell);
         }
         if (convertedRow.getCellsCount() > 0) converted.addRows(convertedRow);
