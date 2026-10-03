@@ -76,9 +76,13 @@ message TableRow {
   repeated TableCell cells = 1;
 }
 
-// One body table, rows in document order.
+// One table, rows in document order: a body table of a word processing
+// document, or a table on a slide.
 message Table {
   repeated TableRow rows = 1;
+  // Set for a table on a slide: the index of the Slide it sits on. Slide
+  // tables follow their Slide event, in shape order.
+  optional uint32 slide_index = 2;
 }
 
 // One spreadsheet cell. `formatted` is the value as the workbook displays it;
@@ -110,8 +114,9 @@ message Sheet {
   repeated SheetRow rows = 3;
 }
 
-// One presentation slide: title, remaining text frames in shape order, and
-// speaker notes.
+// One presentation slide: title, remaining text frames in shape order
+// (shapes inside groups included), and speaker notes. The slide's tables
+// follow it as Table events carrying its index.
 message Slide {
   uint32 index = 1;
   string title = 2;

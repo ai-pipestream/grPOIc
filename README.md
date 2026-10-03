@@ -53,9 +53,9 @@ plus `complete=true`) is the common case.
 |---|---|---|
 | `DocumentInfo` | first, once | `document_id`, detected `DocumentFormat`, typed `DocumentMetadata` |
 | `Paragraph` | body text, in document order; block content controls (a table of contents, a template's fill-in regions) are opened up and their paragraphs and tables emitted in place | `text`, the document's style name (`Heading1`, `Normal`, ...) |
-| `Table` | one body table | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
+| `Table` | one body table, or one native table on a slide (right after its `Slide`, with `slide_index` set) | rows of `TableCell` (text, `row_span`, `col_span`; merged regions, vertical merges included, carry the spans on the anchor cell only and covered positions are not repeated; a row that starts late or ends early gets one empty cell spanning the gap; spans are clamped to 1024) |
 | `Sheet` | one worksheet, streamed as a unit | `index`, `name`, populated `SheetRow`s of typed `SheetCell`s (string/double/boolean/date storage type, plus formula source and cached result for formula cells; empty rows are skipped) |
-| `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts`, speaker `notes` |
+| `Slide` | one presentation slide | `index`, `title`, remaining text frames as `texts` (shapes inside groups included, in shape order), speaker `notes` |
 | `EmbeddedObject` | one embedded part the document carries | `id`, `filename`, `content_type`, `size_bytes` (descriptor only; bytes are not streamed in v1) |
 | `ParseStatus` | last, exactly once | `state` (`STATE_OK` / `STATE_PARTIAL`), human-readable `warnings`, and per-kind counts (`paragraphs`, `tables`, `sheets`, `slides`, `embedded_objects`) |
 
