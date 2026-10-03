@@ -66,7 +66,11 @@ class ParseFailureTest {
           .isTrue();
       assertThat(failure.get()).isInstanceOf(StatusRuntimeException.class);
       Status status = ((StatusRuntimeException) failure.get()).getStatus();
-      await().atMost(Duration.ofSeconds(5))
+      // The service rethrows an OutOfMemoryError after failing the call, on
+      // purpose; Awaitility would otherwise catch that uncaught throw and
+      // fail this wait with it, aborting the test run, whenever the rethrow
+      // lands after the wait has started.
+      await().atMost(Duration.ofSeconds(5)).dontCatchUncaughtExceptions()
           .untilAsserted(() -> assertThat(service.counters().failed()).isEqualTo(1));
       return new Outcome(status, service.counters());
     } finally {
