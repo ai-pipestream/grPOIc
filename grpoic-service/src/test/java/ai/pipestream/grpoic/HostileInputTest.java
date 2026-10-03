@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.poifs.filesystem.POIFSFileSystem;
+import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.AfterAll;
@@ -24,8 +25,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Documents built to hurt the server: zip bombs, allocation claims, entity
- * tricks, and text amplification. Each is turned away with a status, and
- * none can make the server read a local file or allocate past its limits.
+ * tricks, runaway nesting, and text amplification. Each is turned away with
+ * a status, and none can make the server read a local file, allocate past
+ * its limits, or leave a call hanging.
  */
 class HostileInputTest {
 
@@ -114,6 +116,29 @@ class HostileInputTest {
             + W + "\"><w:body><w:p><w:r><w:t>&a9;</w:t></w:r></w:p></w:body></w:document>");
     assertThat(failure(harness.parse(bytes, "laughs", bytes.length)).getCode())
         .isEqualTo(Status.Code.INVALID_ARGUMENT);
+  }
+
+  @Test
+  void deeplyNestedShapesAreRefusedNotACrash() throws Exception {
+    byte[] base;
+    try (XMLSlideShow show = new XMLSlideShow();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      show.createSlide();
+      show.write(out);
+      base = out.toByteArray();
+    }
+    String group = "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"2\" name=\"g\"/><p:cNvGrpSpPr/><p:nvPr/>"
+        + "</p:nvGrpSpPr><p:grpSpPr/>";
+    String slide = "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\""
+        + " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:cSld><p:spTree>"
+        + "<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+        + "<p:grpSpPr/>" + group.repeat(5_000) + "</p:grpSp>".repeat(5_000)
+        + "</p:spTree></p:cSld></p:sld>";
+    byte[] bytes = withPart(base, "/ppt/slides/slide1.xml", slide);
+    // Either the XML reader's depth limit or the stack runs out first; both
+    // must end the call with a status rather than leave it hanging.
+    assertThat(failure(harness.parse(bytes, "nested", bytes.length)).getCode())
+        .isIn(Status.Code.INVALID_ARGUMENT, Status.Code.RESOURCE_EXHAUSTED);
   }
 
   @Test
