@@ -79,8 +79,10 @@ its tab bar.
 
 **Errors** are gRPC status codes: `INVALID_ARGUMENT` (no bytes, stream ended
 without a chunk marked `complete`, unreadable claimed format),
-`RESOURCE_EXHAUSTED` (over the byte cap), `UNIMPLEMENTED` (bytes are not an
-office format this server parses), `INTERNAL` (parser fault). Standard gRPC
+`RESOURCE_EXHAUSTED` (over the byte cap, or the parse ran out of heap or
+stack), `UNIMPLEMENTED` (bytes are not an office format this server parses),
+`INTERNAL` (parser fault). Every failure closes the call, including a parse
+that dies with an `Error`. Standard gRPC
 health checking (`grpc.health.v1.Health`) and reflection (v1 and v1alpha) are
 registered:
 

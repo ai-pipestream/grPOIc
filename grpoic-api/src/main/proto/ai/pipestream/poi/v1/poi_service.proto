@@ -18,9 +18,10 @@ import "ai/pipestream/poi/v1/poi_document.proto";
 // Error model: failures are reported as gRPC status codes. ParseDocument maps
 // errors to INVALID_ARGUMENT (no data, or the stream ended without a chunk
 // marked complete), RESOURCE_EXHAUSTED (the document exceeds the server's byte
-// cap; see GetServiceInfo limits), UNIMPLEMENTED (bytes are not a format this
-// server parses), and INTERNAL (unexpected parser fault). GetServiceInfo does
-// not validate input and completes with OK.
+// cap, see GetServiceInfo limits, or its parse ran out of memory or stack),
+// UNIMPLEMENTED (bytes are not a format this server parses), and INTERNAL
+// (unexpected parser fault). Every failure closes the call. GetServiceInfo
+// does not validate input and completes with OK.
 service PoiParseService {
   // Parses one document. The client streams the document as chunks, marking
   // the last one complete; the server replies with a stream of typed events:

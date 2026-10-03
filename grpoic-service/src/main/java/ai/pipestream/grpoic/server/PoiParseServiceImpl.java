@@ -15,6 +15,7 @@ import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 import org.apache.poi.Version;
 
 /**
@@ -35,18 +36,38 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       .setDescription("Apache POI wrapper for office documents")
       .build();
 
+  // Built ahead of need: when the heap is exhausted, failing the call
+  // should allocate as little as possible.
+  private static final Status OUT_OF_MEMORY = Status.RESOURCE_EXHAUSTED
+      .withDescription("document needs more memory than the server can give it");
+  private static final Status TOO_DEEP = Status.RESOURCE_EXHAUSTED
+      .withDescription("document structure nests too deeply to parse");
+
+  /** The parse step, separate so tests can fail it in ways no document reliably does. */
+  @FunctionalInterface
+  interface Parser {
+    void parse(String documentId, byte[] bytes, Consumer<ParseEvent> emit);
+  }
+
   private final long maxDocumentBytes;
   private final int maxConcurrentParses;
   private final Semaphore parseSlots;
   private final ExecutorService executor;
+  private final Parser parser;
   private final ParseCounters counters = new ParseCounters();
 
   public PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses,
                              ExecutorService executor) {
+    this(maxDocumentBytes, maxConcurrentParses, executor, DocumentParser::parse);
+  }
+
+  PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
+                      Parser parser) {
     this.maxDocumentBytes = maxDocumentBytes;
     this.maxConcurrentParses = maxConcurrentParses;
     this.parseSlots = new Semaphore(maxConcurrentParses);
     this.executor = executor;
+    this.parser = parser;
   }
 
   public ParseCounters counters() {
@@ -119,23 +140,45 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
       return;
     }
     try {
-      DocumentParser.parse(documentId, bytes, responses::onNext);
+      parser.parse(documentId, bytes, responses::onNext);
       responses.onCompleted();
       counters.recordParsed();
     } catch (UnsupportedFormatException unsupported) {
       counters.recordRejected();
-      responses.onError(Status.UNIMPLEMENTED.withDescription(unsupported.getMessage())
-          .asRuntimeException());
+      fail(responses, Status.UNIMPLEMENTED.withDescription(unsupported.getMessage()));
     } catch (InvalidDocumentException invalid) {
       counters.recordRejected();
-      responses.onError(Status.INVALID_ARGUMENT.withDescription(invalid.getMessage())
-          .asRuntimeException());
+      fail(responses, Status.INVALID_ARGUMENT.withDescription(invalid.getMessage()));
     } catch (Exception unexpected) {
       counters.recordFailed();
-      responses.onError(Status.INTERNAL
-          .withDescription("parser fault: " + unexpected.getMessage()).asRuntimeException());
+      fail(responses, Status.INTERNAL.withDescription("parser fault: " + unexpected.getMessage()));
+    } catch (OutOfMemoryError exhausted) {
+      // The document's allocations become unreachable as the stack unwinds,
+      // so the call can still be failed; rethrown so the log shows it.
+      counters.recordFailed();
+      fail(responses, OUT_OF_MEMORY);
+      throw exhausted;
+    } catch (StackOverflowError tooDeep) {
+      counters.recordFailed();
+      fail(responses, TOO_DEEP);
+    } catch (Throwable fault) {
+      // Any other Error (a linkage failure, an assertion) must still close
+      // the call: an open call leaves the client waiting for its deadline.
+      counters.recordFailed();
+      fail(responses, Status.INTERNAL
+          .withDescription("parser fault: " + fault.getClass().getSimpleName()));
+      if (fault instanceof VirtualMachineError machineError) throw machineError;
     } finally {
       parseSlots.release();
+    }
+  }
+
+  /** Fails the call; a call the client already abandoned has nothing left to fail. */
+  private static void fail(StreamObserver<ParseEvent> responses, Status status) {
+    try {
+      responses.onError(status.asRuntimeException());
+    } catch (RuntimeException alreadyClosed) {
+      // cancelled or closed underneath us
     }
   }
 
