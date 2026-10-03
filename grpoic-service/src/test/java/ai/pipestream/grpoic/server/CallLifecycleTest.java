@@ -41,8 +41,13 @@ class CallLifecycleTest {
 
   private void start(int slots, PoiParseServiceImpl.Parser parser, Duration idle)
       throws Exception {
+    start(slots, parser, idle, PoiParseServiceImpl.UPLOAD_TIME_LIMIT);
+  }
+
+  private void start(int slots, PoiParseServiceImpl.Parser parser, Duration idle,
+                     Duration limit) throws Exception {
     executor = Executors.newVirtualThreadPerTaskExecutor();
-    service = new PoiParseServiceImpl(1 << 20, slots, executor, parser, idle);
+    service = new PoiParseServiceImpl(1 << 20, slots, executor, parser, idle, limit);
     String name = InProcessServerBuilder.generateName();
     server = InProcessServerBuilder.forName(name).directExecutor()
         .addService(service).build().start();
@@ -80,6 +85,22 @@ class CallLifecycleTest {
       call.onNext(ParseRequestChunk.newBuilder().setDocumentId("flow")
           .setData(ByteString.copyFromUtf8("bytes")).setComplete(complete).build());
       if (complete) call.onCompleted();
+      return this;
+    }
+
+    /** Sends a chunk of {@code data} every 50 ms, never one marked complete. */
+    Client trickle(ByteString data) {
+      PoiParseServiceGrpc.newStub(channel).parseDocument(this);
+      Thread.ofVirtual().start(() -> {
+        try {
+          while (done.getCount() > 0) {
+            call.onNext(ParseRequestChunk.newBuilder().setDocumentId("drip").setData(data).build());
+            Thread.sleep(50);
+          }
+        } catch (InterruptedException | RuntimeException stopped) {
+          // the call ended underneath the sender
+        }
+      });
       return this;
     }
 
@@ -198,5 +219,34 @@ class CallLifecycleTest {
     // The parsed count lands just after the call completes.
     await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
         assertThat(service.counters().summary()).isEqualTo("docs{parsed=1,rejected=1,failed=0}"));
+  }
+
+  @Test
+  void tricklingUploadIsCutOffAtTheTimeLimit() throws Exception {
+    start(1, (id, data, options, emit) -> emit.accept(event(1)), Duration.ofMillis(300),
+        Duration.ofSeconds(1));
+
+    // A byte every 50 ms never trips the idle timeout; only the total limit ends it.
+    Client drip = new Client(-1).trickle(ByteString.copyFromUtf8("x"));
+    assertThat(drip.done.await(10, TimeUnit.SECONDS)).isTrue();
+    Status status = ((StatusRuntimeException) drip.failure.get()).getStatus();
+    assertThat(status.getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
+    assertThat(status.getDescription()).startsWith("upload took longer than");
+
+    Client next = new Client(-1).upload(true);
+    assertThat(next.done.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(next.failure.get()).isNull();
+  }
+
+  @Test
+  void emptyChunksDoNotCountAsProgress() throws Exception {
+    start(1, (id, data, options, emit) -> emit.accept(event(1)), Duration.ofMillis(300),
+        Duration.ofMinutes(5));
+
+    Client empty = new Client(-1).trickle(ByteString.EMPTY);
+    assertThat(empty.done.await(10, TimeUnit.SECONDS)).isTrue();
+    Status status = ((StatusRuntimeException) empty.failure.get()).getStatus();
+    assertThat(status.getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
+    assertThat(status.getDescription()).startsWith("no upload data for");
   }
 }

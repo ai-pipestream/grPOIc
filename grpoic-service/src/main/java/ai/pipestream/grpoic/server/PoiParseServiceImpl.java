@@ -39,7 +39,9 @@ import org.apache.poi.Version;
  * the parses running. A queued client's bytes stay in its transport window.
  * Chunks are kept as the received ByteStrings, joined without copying, and
  * the parser reads that buffer in place. A client that stops sending for
- * {@link #UPLOAD_IDLE_TIMEOUT} gives its slot back.
+ * {@link #UPLOAD_IDLE_TIMEOUT}, or whose upload as a whole outlasts
+ * {@link #UPLOAD_TIME_LIMIT}, gives its slot back. Only a chunk that carries
+ * bytes counts as progress, so a trickle of empty chunks cannot hold a slot.
  *
  * <p><b>Backpressure out.</b> Events are written only while the transport
  * is ready for more; otherwise the parse thread waits for the ready signal.
@@ -62,6 +64,12 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
 
   /** How long an admitted upload may go without a chunk before it is dropped. */
   static final Duration UPLOAD_IDLE_TIMEOUT = Duration.ofSeconds(30);
+  /**
+   * How long an admitted upload may take in all. The idle timeout alone
+   * would let a client that sends a byte every few seconds keep its slot
+   * forever; this bounds it at about 240 KB/s for a full 70 MiB document.
+   */
+  static final Duration UPLOAD_TIME_LIMIT = Duration.ofMinutes(5);
 
   // Built ahead of need: when the heap is exhausted, failing the call
   // should allocate as little as possible.
@@ -83,6 +91,7 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
   private final ExecutorService executor;
   private final Parser parser;
   private final Duration uploadIdleTimeout;
+  private final Duration uploadTimeLimit;
   private final ParseCounters counters = new ParseCounters();
 
   public PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses,
@@ -98,12 +107,19 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
 
   PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
                       Parser parser, Duration uploadIdleTimeout) {
+    this(maxDocumentBytes, maxConcurrentParses, executor, parser, uploadIdleTimeout,
+        UPLOAD_TIME_LIMIT);
+  }
+
+  PoiParseServiceImpl(long maxDocumentBytes, int maxConcurrentParses, ExecutorService executor,
+                      Parser parser, Duration uploadIdleTimeout, Duration uploadTimeLimit) {
     this.maxDocumentBytes = maxDocumentBytes;
     this.maxConcurrentParses = maxConcurrentParses;
     this.parseSlots = new Semaphore(maxConcurrentParses);
     this.executor = executor;
     this.parser = parser;
     this.uploadIdleTimeout = uploadIdleTimeout;
+    this.uploadTimeLimit = uploadTimeLimit;
     // POI's limits are JVM-wide; they follow the cap of the server in it.
     PoiLimits.install(maxDocumentBytes);
   }
@@ -228,22 +244,31 @@ public final class PoiParseServiceImpl extends PoiParseServiceGrpc.PoiParseServi
     }
 
     /**
-     * Pulls chunks one at a time under the byte cap. Null when the call was
-     * rejected (the status is sent) or abandoned by the client.
+     * Pulls chunks one at a time under the byte cap and the upload's time
+     * limits. Null when the call was rejected (the status is sent) or
+     * abandoned by the client.
      */
     private ByteString receive() throws InterruptedException {
       ByteString received = ByteString.EMPTY;
       boolean sawComplete = false;
+      long deadline = System.nanoTime() + uploadTimeLimit.toNanos();
+      long idleUntil = System.nanoTime() + uploadIdleTimeout.toNanos();
       responses.request(1);
       while (true) {
-        Inbound next = inbound.poll(uploadIdleTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        long wait = Math.min(deadline, idleUntil) - System.nanoTime();
+        Inbound next = wait > 0 ? inbound.poll(wait, TimeUnit.NANOSECONDS) : null;
         if (next == null) {
           counters.recordRejected();
-          fail(Status.DEADLINE_EXCEEDED.withDescription(
-              "no upload data for " + uploadIdleTimeout.toSeconds() + " s"));
+          fail(Status.DEADLINE_EXCEEDED.withDescription(deadline - idleUntil <= 0
+              ? "upload took longer than " + uploadTimeLimit.toSeconds() + " s"
+              : "no upload data for " + uploadIdleTimeout.toSeconds() + " s"));
           return null;
         }
         if (next instanceof Chunk(ParseRequestChunk chunk)) {
+          // An empty chunk is not progress; it must not keep the slot alive.
+          if (!chunk.getData().isEmpty()) {
+            idleUntil = System.nanoTime() + uploadIdleTimeout.toNanos();
+          }
           if (options == null) options = new ParseOptions(chunk.getSheetBatches());
           if (documentId.isEmpty() && !chunk.getDocumentId().isEmpty()) {
             documentId = chunk.getDocumentId();

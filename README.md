@@ -85,9 +85,9 @@ are corrupt), `FAILED_PRECONDITION` (the document is encrypted),
 `RESOURCE_EXHAUSTED` (over the byte cap, a spreadsheet whose text exceeds the
 limit below, or a parse that ran out of heap or stack), `UNIMPLEMENTED` (bytes
 are not an office format this server parses, including the pre-97 binary
-formats), `DEADLINE_EXCEEDED` (an upload that stalled, see below), `INTERNAL`
-(a fault in grPOIc itself). Every failure closes the call, including a parse
-that dies with an `Error`. Damage confined to one element (a cell, a
+formats), `DEADLINE_EXCEEDED` (an upload that stalled or ran too long, see
+below), `INTERNAL` (a fault in grPOIc itself). Every failure closes the call,
+including a parse that dies with an `Error`. Damage confined to one element (a cell, a
 paragraph, a table, a slide shape, the property parts) skips that element
 with a warning and a `STATE_PARTIAL` status instead of failing the document;
 `warnings` keeps the first 20 and then one closing note.
@@ -110,7 +110,9 @@ reads the first chunk and pulls chunks one at a time, so the bound covers
 uploads as well as parses: a queued client's bytes stay in its transport
 window instead of the heap. Chunks are kept as received and joined without
 copying; the parser reads that buffer in place. An admitted upload that sends
-nothing for 30 seconds gives its slot back (`DEADLINE_EXCEEDED`).
+no bytes for 30 seconds, or that is still uploading after 5 minutes, gives
+its slot back (`DEADLINE_EXCEEDED`); empty chunks do not count as progress,
+so a trickling client cannot hold a slot.
 
 Events go out only while the transport is ready for more, so a slow reader
 stalls its own parse instead of piling messages up in the server. A cancelled
