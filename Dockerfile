@@ -5,7 +5,7 @@
 # and for Renovate, which updates the digest.
 # The -jdk-dev variant of the Docker Hardened Images temurin carries a
 # shell and runs as root, which the Gradle build needs.
-FROM dhi.io/eclipse-temurin:25-jdk-dev@sha256:95e456232f6a87c4291315e6a3b4fb19ba36ae7bd8f6bba6f8316e49b60dab83 AS build
+FROM dhi.io/eclipse-temurin:25-jdk-dev@sha256:693a788c0ea5a29ce15d0d3f1f82953166fe177db675447f2d345a81ec6923e8 AS build
 WORKDIR /src
 COPY . .
 RUN ./gradlew --no-daemon build :grpoic-service:installDist
@@ -22,7 +22,7 @@ RUN ./gradlew --no-daemon build :grpoic-service:installDist
 # metaspace and thread stacks. No ExitOnOutOfMemoryError: a parse that
 # runs out of heap is caught, its call fails with RESOURCE_EXHAUSTED and
 # its document becomes garbage, while the other calls keep running.
-FROM dhi.io/eclipse-temurin:25@sha256:a84cb91dd9815564076eaff9f4d762ff893c4c97a8d81cbb68d2af066798cc9c
+FROM dhi.io/eclipse-temurin:25@sha256:24247f48855acba1fad726427f239d37cb4873bbf5d818f94341fb4485fa713c
 COPY --from=build /src/grpoic-service/build/install/grpoic-service /opt/grpoic
 EXPOSE 50052
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=60", "-cp", "/opt/grpoic/lib/*", \
