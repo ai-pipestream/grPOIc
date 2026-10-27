@@ -3,11 +3,13 @@ package ai.pipestream.grpoic.parse;
 import ai.pipestream.poi.v1.DocumentMetadata;
 import ai.pipestream.poi.v1.MetadataEntry;
 import ai.pipestream.poi.v1.MetadataValue;
+import java.util.Calendar;
 import java.util.Optional;
 import org.apache.poi.hpsf.SummaryInformation;
 import org.apache.poi.ooxml.POIXMLDocument;
 import org.apache.poi.ooxml.POIXMLProperties;
 import org.apache.poi.openxml4j.opc.PackageProperties;
+import org.openxmlformats.schemas.officeDocument.x2006.customProperties.CTProperty;
 
 /**
  * Maps document properties onto the typed metadata contract. Well-known core
@@ -54,24 +56,33 @@ public final class MetadataReader {
     if (extended.isSetCharacters()) addInt(metadata, "characters", extended.getCharacters());
 
     for (var property : properties.getCustomProperties().getUnderlyingProperties().getPropertyList()) {
-      MetadataValue.Builder value = MetadataValue.newBuilder();
-      if (property.isSetLpwstr()) {
-        value.setStringValue(property.getLpwstr());
-      } else if (property.isSetI4()) {
-        value.setIntValue(property.getI4());
-      } else if (property.isSetR8()) {
-        value.setDoubleValue(property.getR8());
-      } else if (property.isSetBool()) {
-        value.setBoolValue(property.getBool());
-      } else if (property.isSetFiletime()) {
-        value.setTimestampValue(ProtoTimestamps.fromDate(property.getFiletime().getTime()));
-      } else {
-        continue;
-      }
+      MetadataValue value = customValue(property);
+      if (value == null) continue;
       metadata.addTail(
           MetadataEntry.newBuilder().setKey("custom:" + property.getName()).addValues(value));
     }
     return metadata.build();
+  }
+
+  /**
+   * A custom property's value in the type it declares, or null for a type
+   * not carried on the wire or a value the part marks nil (no value).
+   */
+  private static MetadataValue customValue(CTProperty property) {
+    MetadataValue.Builder value = MetadataValue.newBuilder();
+    if (property.isSetLpwstr()) {
+      String text = property.getLpwstr();
+      return text == null ? null : value.setStringValue(text).build();
+    }
+    if (property.isSetFiletime()) {
+      Calendar time = property.getFiletime();
+      if (time == null) return null;
+      return value.setTimestampValue(ProtoTimestamps.fromDate(time.getTime())).build();
+    }
+    if (property.isSetI4()) return value.setIntValue(property.getI4()).build();
+    if (property.isSetR8()) return value.setDoubleValue(property.getR8()).build();
+    if (property.isSetBool()) return value.setBoolValue(property.getBool()).build();
+    return null;
   }
 
   /** HPSF summary stream of the OLE2 legacy formats; null-safe. */
