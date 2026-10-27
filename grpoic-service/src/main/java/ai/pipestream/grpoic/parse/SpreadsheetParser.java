@@ -12,6 +12,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import org.apache.poi.ss.SpreadsheetVersion;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -54,6 +55,8 @@ final class SpreadsheetParser {
    * shared string) would be free, and a sheet could emit millions of them.
    */
   static final int CELL_COST = 4;
+  /** The highest zero-based column a sheet can hold (XFD); XLS sheets stop well short. */
+  static final int LAST_COLUMN = SpreadsheetVersion.EXCEL2007.getLastColumnIndex();
 
   private SpreadsheetParser() {}
 
@@ -119,10 +122,17 @@ final class SpreadsheetParser {
     void sheet(int index, String name, boolean hidden, Iterator<? extends Row> rows,
                Supplier<List<CellRangeAddress>> mergedRegions) {
       Batches batches = new Batches(index, name, hidden);
+      long outsideColumns = 0;
       while (rows.hasNext()) {
         Row row = rows.next();
         SheetRow.Builder convertedRow = SheetRow.newBuilder().setRowIndex(row.getRowNum());
         for (Cell cell : row) {
+          // A reference past the last column, or so long that POI's column
+          // arithmetic wrapped negative, names no position on the sheet.
+          if (cell.getColumnIndex() < 0 || cell.getColumnIndex() > LAST_COLUMN) {
+            outsideColumns++;
+            continue;
+          }
           SheetCell.Builder convertedCell;
           try {
             convertedCell = convert(cell, formatter);
@@ -142,6 +152,10 @@ final class SpreadsheetParser {
         if (convertedRow.getCellsCount() > 0) batches.add(convertedRow.build());
       }
       batches.finish(merged(name, mergedRegions.get()));
+      if (outsideColumns > 0) {
+        DocumentFaults.warn(status, "sheet '" + name + "' has " + outsideColumns
+            + " cells in columns outside A to XFD; they were skipped");
+      }
       status.setSheets(status.getSheets() + 1);
     }
 
