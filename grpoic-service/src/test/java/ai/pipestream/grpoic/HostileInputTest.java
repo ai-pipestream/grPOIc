@@ -5,6 +5,8 @@ import static ai.pipestream.grpoic.OoxmlFixtures.withPart;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ai.pipestream.grpoic.ParseHarness.ParseResult;
+import ai.pipestream.poi.v1.ParseEvent;
+import ai.pipestream.poi.v1.ParseStatus;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import java.io.ByteArrayInputStream;
@@ -166,6 +168,90 @@ class HostileInputTest {
     } finally {
       ZipSecureFile.setMaxTextSize(installed);
     }
+  }
+
+  /**
+   * A DOCX with a notes part (footnotes or endnotes) and the given body.
+   * Each note's paragraphs are spelled out; the chain of references
+   * between notes is what POI's writer never produces.
+   */
+  private static byte[] docxWithNotes(String kind, String notesXml, String bodyXml)
+      throws Exception {
+    byte[] base;
+    try (XWPFDocument document = new XWPFDocument();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      if (kind.equals("footnote")) {
+        document.createFootnotes();
+        document.createFootnote();
+      } else {
+        document.createEndnotes();
+        document.createEndnote();
+      }
+      document.write(out);
+      base = out.toByteArray();
+    }
+    base = withPart(base, "/word/" + kind + "s.xml",
+        "<w:" + kind + "s xmlns:w=\"" + W + "\">" + notesXml + "</w:" + kind + "s>");
+    return withPart(base, "/word/document.xml",
+        "<w:document xmlns:w=\"" + W + "\"><w:body>" + bodyXml + "</w:body></w:document>");
+  }
+
+  /**
+   * Note 0 holds a few letters; each note above it references the one
+   * below ten times, and the body references the top. The text a
+   * paragraph yields grows tenfold per level, from a few bytes of XML each.
+   */
+  private static byte[] noteChain(String kind, int levels) throws Exception {
+    StringBuilder notes = new StringBuilder(
+        "<w:" + kind + " w:id=\"0\"><w:p><w:r><w:t>lol</w:t></w:r></w:p></w:" + kind + ">");
+    for (int level = 1; level <= levels; level++) {
+      notes.append("<w:").append(kind).append(" w:id=\"").append(level).append("\"><w:p>")
+          .append(("<w:r><w:" + kind + "Reference w:id=\"" + (level - 1) + "\"/></w:r>")
+              .repeat(10))
+          .append("</w:p></w:").append(kind).append(">");
+    }
+    return docxWithNotes(kind, notes.toString(),
+        "<w:p><w:r><w:t>body</w:t><w:" + kind + "Reference w:id=\"" + levels + "\"/></w:r></w:p>");
+  }
+
+  @Test
+  void footnoteChainHitsTheTextBudget() throws Exception {
+    byte[] bytes = noteChain("footnote", 6);
+    assertThat(bytes.length).as("a short chain, a few bytes per level").isLessThan(5_000);
+    long installed = ZipSecureFile.getMaxTextSize();
+    ZipSecureFile.setMaxTextSize(1_000_000);
+    try {
+      Status status = failure(harness.parse(bytes, "footnotes", bytes.length));
+      assertThat(status.getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
+      assertThat(status.getDescription()).isEqualTo("note text exceeds 1000000 characters");
+    } finally {
+      ZipSecureFile.setMaxTextSize(installed);
+    }
+  }
+
+  @Test
+  void endnoteChainHitsTheTextBudget() throws Exception {
+    byte[] bytes = noteChain("endnote", 6);
+    long installed = ZipSecureFile.getMaxTextSize();
+    ZipSecureFile.setMaxTextSize(1_000_000);
+    try {
+      Status status = failure(harness.parse(bytes, "endnotes", bytes.length));
+      assertThat(status.getCode()).isEqualTo(Status.Code.RESOURCE_EXHAUSTED);
+      assertThat(status.getDescription()).isEqualTo("note text exceeds 1000000 characters");
+    } finally {
+      ZipSecureFile.setMaxTextSize(installed);
+    }
+  }
+
+  @Test
+  void noteTextWithinTheBudgetStaysWithItsParagraph() throws Exception {
+    byte[] bytes = noteChain("footnote", 1);
+    ParseResult result = harness.parseOk(bytes, "short-notes");
+    assertThat(result.eventsOf(ParseEvent::hasParagraph))
+        .extracting(event -> event.getParagraph().getText())
+        .hasSize(1)
+        .allSatisfy(text -> assertThat(text).startsWith("body").contains("lol"));
+    assertThat(result.status().getState()).isEqualTo(ParseStatus.State.STATE_OK);
   }
 
   /** An XML comment of random letters: filler that keeps a part inside POI's 1:100 ratio. */
