@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import ai.pipestream.grpoic.ParseHarness.ParseResult;
 import ai.pipestream.poi.v1.ParseEvent;
 import ai.pipestream.poi.v1.ParseStatus;
+import ai.pipestream.poi.v1.SheetCell;
 import ai.pipestream.poi.v1.SheetRow;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -220,6 +221,24 @@ class MalformedInputTest {
     assertThat(status.getState()).isEqualTo(ParseStatus.State.STATE_PARTIAL);
     assertThat(status.getWarningsList()).contains(
         "sheet 'Data' has 3 rows numbered outside 1 to 1048576; they were skipped");
+  }
+
+  @Test
+  void cellsNumberedOutsideTheSheetCostOnlyThemselves() throws Exception {
+    // One column past XFD, and a reference so long its column wraps negative;
+    // neither can be placed, and neither may reach the wire as a uint32.
+    ParseResult result = harness.parseOk(xlsxWithSheet(
+        "<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"XFE1\"><v>2</v></c>"
+            + "<c r=\"ZZZZZZZZZZ1\"><v>3</v></c></row>"),
+        "bad-columns");
+    var rows = result.eventsOf(ParseEvent::hasSheet).get(0).getSheet().getRowsList();
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).getCellsList()).extracting(SheetCell::getColumnIndex)
+        .containsExactly(0);
+    ParseStatus status = result.status();
+    assertThat(status.getState()).isEqualTo(ParseStatus.State.STATE_PARTIAL);
+    assertThat(status.getWarningsList()).contains(
+        "sheet 'Data' has 2 cells in columns outside A to XFD; they were skipped");
   }
 
   @Test
