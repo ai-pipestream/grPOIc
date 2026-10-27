@@ -95,6 +95,43 @@ class MalformedInputTest {
             + "</sheetData></worksheet>");
   }
 
+  /** A DOCX whose custom properties part is the given property list. */
+  private static byte[] docxWithCustomProperties(String properties) throws Exception {
+    byte[] base;
+    try (XWPFDocument document = new XWPFDocument();
+         ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      document.createParagraph().createRun().setText("body");
+      document.getProperties().getCustomProperties().addProperty("placeholder", "x");
+      document.write(out);
+      base = out.toByteArray();
+    }
+    return withPart(base, "/docProps/custom.xml",
+        "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/"
+            + "custom-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/"
+            + "2006/docPropsVTypes\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+            + properties + "</Properties>");
+  }
+
+  private static String customProperty(int pid, String name, String value) {
+    return "<property fmtid=\"{D5CDD505-2E9C-101B-9397-08002B2CF9AE}\" pid=\"" + pid
+        + "\" name=\"" + name + "\">" + value + "</property>";
+  }
+
+  @Test
+  void nilCustomPropertyValuesAreLeftOut() throws Exception {
+    // xsi:nil is a legal spelling of "no value"; it must not fail the call.
+    byte[] bytes = docxWithCustomProperties(
+        customProperty(2, "text", "<vt:lpwstr xsi:nil=\"true\"/>")
+            + customProperty(3, "when", "<vt:filetime xsi:nil=\"true\"/>")
+            + customProperty(4, "kept", "<vt:lpwstr>value</vt:lpwstr>"));
+    ParseResult result = harness.parseOk(bytes, "nil-custom");
+    assertThat(result.events().get(0).getDocumentInfo().getMetadata().getTailList())
+        .filteredOn(entry -> entry.getKey().startsWith("custom:"))
+        .extracting(entry -> entry.getKey() + "=" + entry.getValues(0).getStringValue())
+        .containsExactly("custom:kept=value");
+    assertThat(result.status().getState()).isEqualTo(ParseStatus.State.STATE_OK);
+  }
+
   @Test
   void corruptBodyXmlIsInvalidArgument() throws Exception {
     byte[] bytes = withPart(blankDocx(), "/word/document.xml",
