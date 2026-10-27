@@ -112,7 +112,7 @@ public final class DocumentParser {
       String coreType = coreContentType(container);
       String normalized = coreType.toLowerCase(Locale.ROOT);
       if (WORD_TYPES.contains(normalized)) {
-        try (XWPFDocument document = new XWPFDocument(container)) {
+        try (XWPFDocument document = new BudgetedWordDocument(container)) {
           ParseStatus.Builder status = start(documentId, DocumentFormat.DOCUMENT_FORMAT_DOCX,
               () -> MetadataReader.read(document), emit);
           WordParser.parse(document, emit, status);
