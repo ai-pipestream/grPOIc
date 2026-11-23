@@ -95,7 +95,7 @@ final class SpreadsheetParser {
 
   /** Per-workbook conversion state: the formatter, the text budget, the batching choice. */
   private static final class Conversion {
-    private final DataFormatter formatter = new DataFormatter();
+    private final DataFormatter formatter = displayFormatter();
     // A shared string costs its length every time a cell repeats it, so the
     // cells are charged for what they yield, not for what the file stores.
     private final TextBudget budget = new TextBudget("spreadsheet text");
@@ -242,16 +242,26 @@ final class SpreadsheetParser {
     }
   }
 
+  /**
+   * The formatter behind {@code formatted}. It renders a formula cell from
+   * its cached result under the cell's own number format, exactly as it
+   * renders a cell that holds the value outright; left at POI's default it
+   * would return the formula source instead. Nothing is evaluated.
+   */
+  private static DataFormatter displayFormatter() {
+    DataFormatter formatter = new DataFormatter();
+    formatter.setUseCachedValuesForFormulaCells(true);
+    return formatter;
+  }
+
   private static SheetCell.Builder convert(Cell cell, DataFormatter formatter) {
     SheetCell.Builder converted = SheetCell.newBuilder().setColumnIndex(cell.getColumnIndex());
     CellType type = cell.getCellType();
     if (type == CellType.FORMULA) {
       converted.setFormula(cell.getCellFormula());
       type = cell.getCachedFormulaResultType();
-      converted.setFormatted(cachedFormatted(cell, type));
-    } else if (type != CellType.BLANK) {
-      converted.setFormatted(formatter.formatCellValue(cell));
     }
+    if (type != CellType.BLANK) converted.setFormatted(formatter.formatCellValue(cell));
     switch (type) {
       case STRING -> converted.setText(cell.getStringCellValue());
       case BOOLEAN -> converted.setBoolean(cell.getBooleanCellValue());
@@ -271,15 +281,5 @@ final class SpreadsheetParser {
       }
     }
     return converted;
-  }
-
-  private static String cachedFormatted(Cell cell, CellType cachedType) {
-    return switch (cachedType) {
-      case STRING -> cell.getStringCellValue();
-      case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
-      case NUMERIC -> String.valueOf(cell.getNumericCellValue());
-      case ERROR -> FormulaError.forInt(cell.getErrorCellValue()).getString();
-      default -> "";
-    };
   }
 }

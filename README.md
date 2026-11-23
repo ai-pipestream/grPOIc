@@ -67,8 +67,10 @@ formats include their template, slideshow and macro-enabled variants (.dotx,
 and the VBA project part is never read. The format is detected from the
 bytes; the advisory content type is never trusted.
 Spreadsheet cells keep their storage types (string, double, boolean, date).
-Formula cells carry the formula source plus the cached result; formulas are
-never evaluated. Metadata is typed and lossless: well-known core properties as
+Formula cells carry the formula source plus the cached result, and
+`formatted` is that result under the cell's number format (`45.67%`, not
+`0.4567`), as for a cell holding a plain value; formulas are never
+evaluated. Metadata is typed and lossless: well-known core properties as
 first-class fields (`title`, `author`, `last_modified_by`, `created`,
 `modified`), everything else in a tagged `tail`, nothing guessed from string
 shapes.

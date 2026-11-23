@@ -87,7 +87,9 @@ message Table {
 
 // One spreadsheet cell. `formatted` is the value as the workbook displays it;
 // the typed value keeps the underlying storage type. Formula cells carry the
-// formula source and their cached result as the typed value.
+// formula source and their cached result as the typed value; their
+// `formatted` is that cached result under the cell's number format, the
+// same as for a cell that holds the value outright.
 message SheetCell {
   uint32 column_index = 1;
   string formatted = 2;
